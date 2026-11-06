@@ -41,16 +41,41 @@ Requiere Android 7.0 (API 24) o superior.
             └── MainActivity.kt    # Toda la lógica y la interfaz
 ```
 
+## Cómo obtener el APK
+
+No hace falta instalar nada en el ordenador: GitHub compila la app en la nube.
+
+1. Sube el proyecto a un repositorio de GitHub.
+2. Ve a la pestaña **Actions**. Cada commit lanza una compilación. También puedes lanzarla a mano con **Run workflow**.
+3. Cuando termine con el check verde (tarda unos 3-5 minutos), abre la ejecución y baja hasta **Artifacts**.
+4. Descarga `valorant-picker-apk`, descomprímelo y abre `app-debug.apk`.
+5. Si Android lo pide, permite **instalar apps de origen desconocido**.
+
+El APK que se genera es de depuración (*debug*), firmado con la clave de depuración, y sirve para instalarlo directamente.
+
+## Compilar en local
+
+Si prefieres Android Studio:
+
+1. Abre la carpeta del proyecto.
+2. Espera a que sincronice Gradle.
+3. Menú **Build → Build APK(s)**.
 
 ## Cómo funciona
 
-- **Retratos:** al abrir la app se consulta `https://valorant-api.com/v1/agents?isPlayableCharacter=true`. Las rutas de las imágenes se guardan en el dispositivo, así que solo hace falta conexión la primera vez.
+- **Agentes y retratos:** al abrir la app se consulta `https://valorant-api.com/v1/agents?isPlayableCharacter=true`. Los nombres, roles y rutas de las imágenes se guardan en el dispositivo, así que sin conexión se usa la última lista descargada.
 - **Ruleta:** el ganador se decide antes de girar y la animación se calcula para que el puntero se detenga justo sobre él.
 - **Sonidos:** se generan con tonos básicos del sistema, sin archivos de audio.
 
-## Actualizar la lista de agentes
+## Agentes nuevos
 
-Los agentes están definidos en la lista `AGENTS` al principio de `MainActivity.kt`. Cuando salga uno nuevo, añade su nombre en la lista del rol que le corresponda. El nombre debe coincidir con el de la API para que aparezca su imagen.
+La lista de agentes se actualiza sola. Cada vez que abres la app con conexión, consulta la API y:
+
+- Añade los agentes nuevos con su **nombre, rol y retrato**.
+- Los activa automáticamente en el Agent Pool y muestra un aviso con su nombre.
+- Guarda la lista en el dispositivo, así que sin conexión sigue funcionando con la última versión descargada.
+
+No hace falta tocar el código ni recompilar. La lista `DEFAULT_AGENTS` de `MainActivity.kt` solo se usa la primera vez, antes de tener internet. La única excepción sería que Riot creara un **rol nuevo**: habría que añadirlo a `Role` en el código.
 
 ## Hecho con Inteligencia Artificial e Inteligencia Artesanal
 
