@@ -1,25 +1,55 @@
 # Valorant Picker
 
-Aplicación Android para elegir agentes de VALORANT al azar con una ruleta animada. Está hecha con Kotlin y Jetpack Compose, y es de uso personal.
+Aplicación Android para VALORANT con tres herramientas: una ruleta de agentes, recomendaciones de pickeo para tu equipo y un sorteo de armas. Está hecha con Kotlin y Jetpack Compose, y es de uso personal.
 
 ## Características
 
-- **Ruleta animada** con frenado progresivo, puntero y colores por rol.
-- **Giro individual** para obtener un agente.
-- **Giro de equipo** para generar una composición de 1 a 5 agentes sin repetir, con un rol opcional por hueco y opción de mezclar los roles.
-- **Filtros por rol** (Controller, Sentinel, Initiator y Duelist).
-- **Agent Pool** para activar o desactivar agentes concretos.
-- **Presets** guardados para el pool de agentes y para el equipo.
-- **Retratos de los agentes**, descargados desde [valorant-api.com](https://valorant-api.com).
-- **Ajustes de giro y sonido:** duración, intensidad, color del puntero, sonido de ticks y volumen de victoria.
-- **Compartir el resultado** como texto.
+La navegación se hace con una barra inferior de tres iconos:
+
+| Icono | Pestaña | Qué hace |
+|-------|---------|----------|
+| Persona | **Agentes** | Ruleta animada para elegir un agente al azar |
+| Bombilla | **Recomendaciones** | Eliges a tu equipo y la app te sugiere qué agentes te convienen |
+| Mira | **Armas** | Sorteo aleatorio de armas con su imagen, nombre y precio |
+
+### Agentes
+- Ruleta animada con frenado progresivo y puntero.
+- Filtros por rol con los iconos oficiales, todos en una sola fila.
+- Resultado con la cara del agente, su nombre y su rol en español.
+
+### Recomendaciones
+- Eliges hasta 5 agentes tocando los círculos de tu equipo.
+- La app analiza los roles de tu equipo y avisa de lo que falta o sobra (por ejemplo, sin controlador o demasiados duelistas).
+- Te propone agentes por rol, con su foto, sus habilidades y la descripción del rol que da la API.
+- Si tocas un agente recomendado, se añade a tu primer hueco libre.
+
+### Armas
+- Sorteo con animación: las armas del sorteo se iluminan una a una hasta detenerse en la elegida.
+- Resultado con imagen, nombre, categoría y costo en créditos.
+- Filtros por categoría (pistolas, subfusiles, escopetas, rifles, francotiradores, pesadas y cuerpo a cuerpo).
+
+### General
+- Las imágenes se precargan al abrir la app, así que el resultado aparece al instante.
+- Ajustes de duración, intensidad, color del puntero y sonido.
 - Todo se guarda automáticamente en el dispositivo.
+
+## Agentes y armas nuevos
+
+La app se actualiza sola. Cada vez que la abres con conexión, consulta [valorant-api.com](https://valorant-api.com) y descarga:
+
+- Los agentes con su nombre, rol, foto y habilidades.
+- La información de los roles (icono y descripción en español).
+- Las armas con su imagen, categoría y precio.
+
+Si Riot añade un agente o un arma, aparece sin tocar el código ni recompilar. Para un agente nuevo se muestra además un aviso con su nombre. Todo se guarda en el dispositivo, así que sin conexión se usa la última versión descargada. La primera vez que se instala hace falta internet para ver imágenes y armas.
+
+La única excepción sería que Riot creara un **rol nuevo**: habría que añadirlo a `Role` en `MainActivity.kt`.
 
 ## Tecnologías
 
 - Kotlin 2.0.20
-- Jetpack Compose (Material 3)
-- Coil 2.7.0 para cargar imágenes
+- Jetpack Compose (Material 3 y Material Icons Extended)
+- Coil 2.7.0 para cargar y cachear imágenes
 - Gradle 8.9 y Android Gradle Plugin 8.5.2
 - GitHub Actions para compilar el APK
 
@@ -41,21 +71,6 @@ Requiere Android 7.0 (API 24) o superior.
             └── MainActivity.kt    # Toda la lógica y la interfaz
 ```
 
-## Cómo funciona
-
-- **Agentes y retratos:** al abrir la app se consulta `https://valorant-api.com/v1/agents?isPlayableCharacter=true`. Los nombres, roles y rutas de las imágenes se guardan en el dispositivo, así que sin conexión se usa la última lista descargada.
-- **Ruleta:** el ganador se decide antes de girar y la animación se calcula para que el puntero se detenga justo sobre él.
-- **Sonidos:** se generan con tonos básicos del sistema, sin archivos de audio.
-
-## Agentes nuevos
-
-La lista de agentes se actualiza sola. Cada vez que abres la app con conexión, consulta la API y:
-
-- Añade los agentes nuevos con su **nombre, rol y retrato**.
-- Los activa automáticamente en el Agent Pool y muestra un aviso con su nombre.
-- Guarda la lista en el dispositivo, así que sin conexión sigue funcionando con la última versión descargada.
-
-No hace falta tocar el código ni recompilar. La lista `DEFAULT_AGENTS` de `MainActivity.kt` solo se usa la primera vez, antes de tener internet. La única excepción sería que Riot creara un **rol nuevo**: habría que añadirlo a `Role` en el código.
 
 ## Hecho con Inteligencia Artificial e Inteligencia Artesanal
 
@@ -68,6 +83,7 @@ La IA aceleró el trabajo, pero la intención y el criterio fueron artesanales. 
 
 ## Créditos y aviso legal
 
-- Los datos e imágenes de los agentes provienen de [valorant-api.com](https://valorant-api.com), un servicio de la comunidad.
+- Los datos e imágenes de agentes, roles y armas provienen de [valorant-api.com](https://valorant-api.com), un servicio de la comunidad.
 - Idea inspirada en [valorantpicker.com](https://www.valorantpicker.com/) y [valorantagentwheel.com](https://valorantagentwheel.com/).
+- Las recomendaciones de equipo se basan en el equilibrio de roles y en los datos de la API. No usan estadísticas de partidas ni de meta.
 - Este proyecto no está afiliado, respaldado ni patrocinado por Riot Games. VALORANT y todos los elementos relacionados son propiedad de Riot Games, Inc.
