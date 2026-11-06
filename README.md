@@ -41,26 +41,6 @@ Requiere Android 7.0 (API 24) o superior.
             └── MainActivity.kt    # Toda la lógica y la interfaz
 ```
 
-## Cómo obtener el APK
-
-No hace falta instalar nada en el ordenador: GitHub compila la app en la nube.
-
-1. Sube el proyecto a un repositorio de GitHub.
-2. Ve a la pestaña **Actions**. Cada commit lanza una compilación. También puedes lanzarla a mano con **Run workflow**.
-3. Cuando termine con el check verde (tarda unos 3-5 minutos), abre la ejecución y baja hasta **Artifacts**.
-4. Descarga `valorant-picker-apk`, descomprímelo y abre `app-debug.apk`.
-5. Si Android lo pide, permite **instalar apps de origen desconocido**.
-
-El APK que se genera es de depuración (*debug*), firmado con la clave de depuración, y sirve para instalarlo directamente.
-
-## Compilar en local
-
-Si prefieres Android Studio:
-
-1. Abre la carpeta del proyecto.
-2. Espera a que sincronice Gradle.
-3. Menú **Build → Build APK(s)**.
-
 ## Cómo funciona
 
 - **Agentes y retratos:** al abrir la app se consulta `https://valorant-api.com/v1/agents?isPlayableCharacter=true`. Los nombres, roles y rutas de las imágenes se guardan en el dispositivo, así que sin conexión se usa la última lista descargada.
