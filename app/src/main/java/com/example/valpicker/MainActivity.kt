@@ -7,6 +7,7 @@ import android.graphics.Typeface
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.core.Animatable
@@ -59,9 +60,9 @@ enum class Role(val label: String, val color: Color) {
     Duelist("Duelist", Color(0xFFFF4655))
 }
 
-data class Agent(val name: String, val role: Role)
+data class Agent(val name: String, val role: Role, val icon: String? = null)
 
-val AGENTS = listOf("Astra", "Brimstone", "Clove", "Harbor", "Miks", "Omen", "Viper")
+val DEFAULT_AGENTS = listOf("Astra", "Brimstone", "Clove", "Harbor", "Miks", "Omen", "Viper")
     .map { Agent(it, Role.Controller) } +
     listOf("Chamber", "Cypher", "Deadlock", "Killjoy", "Sage", "Veto", "Vyse")
         .map { Agent(it, Role.Sentinel) } +
@@ -69,6 +70,10 @@ val AGENTS = listOf("Astra", "Brimstone", "Clove", "Harbor", "Miks", "Omen", "Vi
         .map { Agent(it, Role.Initiator) } +
     listOf("Hush", "Iso", "Jett", "Neon", "Phoenix", "Raze", "Reyna", "Waylay", "Yoru")
         .map { Agent(it, Role.Duelist) }
+
+// Lista viva de agentes: se actualiza desde la API
+val agentList = mutableStateOf(DEFAULT_AGENTS)
+val AGENTS: List<Agent> get() = agentList.value
 
 val POINTER_COLORS = listOf(Color(0xFFFF4655), Color.White, Color(0xFFFFD54F), Color(0xFF4FC3F7))
 
@@ -181,7 +186,7 @@ class TonePlayer(private val tone: Int, private val ms: Int) {
     }
 }
 
-suspend fun fetchIcons(): Map<String, String> = withContext(Dispatchers.IO) {
+suspend fun fetchAgents(): List<Agent> = withContext(Dispatchers.IO) {
     val conn = URL("https://valorant-api.com/v1/agents?isPlayableCharacter=true")
         .openConnection() as HttpURLConnection
     conn.connectTimeout = 10000
@@ -189,25 +194,36 @@ suspend fun fetchIcons(): Map<String, String> = withContext(Dispatchers.IO) {
     try {
         val text = conn.inputStream.bufferedReader().use { it.readText() }
         val arr = JSONObject(text).getJSONArray("data")
-        val m = mutableMapOf<String, String>()
+        val list = mutableListOf<Agent>()
         for (i in 0 until arr.length()) {
             val o = arr.getJSONObject(i)
-            val icon = o.optString("displayIcon")
-            if (icon.isNotBlank()) m[o.getString("displayName").lowercase()] = icon
+            val name = o.optString("displayName")
+            val roleName = o.optJSONObject("role")?.optString("displayName") ?: ""
+            val role = Role.values().firstOrNull { it.label.equals(roleName, true) }
+            val icon = o.optString("displayIcon").ifBlank { null }
+            if (name.isNotBlank() && role != null) list.add(Agent(name, role, icon))
         }
-        m
+        list.sortedWith(compareBy({ it.role.ordinal }, { it.name }))
     } finally {
         conn.disconnect()
     }
 }
 
-fun loadIconCache(prefs: SharedPreferences): Map<String, String> {
-    val m = mutableMapOf<String, String>()
-    (prefs.getString("icons", "") ?: "").split("\n").forEach { l ->
-        val i = l.indexOf('|')
-        if (i > 0) m[l.substring(0, i)] = l.substring(i + 1)
+fun saveAgentCache(prefs: SharedPreferences, list: List<Agent>) {
+    prefs.edit().putString(
+        "agents_cache",
+        list.joinToString("\n") { "${it.name}|${it.role.name}|${it.icon ?: ""}" }
+    ).apply()
+}
+
+fun loadAgentCache(prefs: SharedPreferences): List<Agent>? {
+    val list = (prefs.getString("agents_cache", "") ?: "").split("\n").mapNotNull { l ->
+        val p = l.split("|")
+        if (p.size < 3) return@mapNotNull null
+        val role = Role.values().firstOrNull { it.name == p[1] } ?: return@mapNotNull null
+        Agent(p[0], role, p[2].ifBlank { null })
     }
-    return m
+    return list.ifEmpty { null }
 }
 
 @Composable
@@ -244,6 +260,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val prefs = getSharedPreferences("wheel", MODE_PRIVATE)
+        loadAgentCache(prefs)?.let { agentList.value = it }
         val st = AppState(prefs)
         val poolPresets = Presets(prefs, "pool_presets")
         val teamPresets = Presets(prefs, "team_presets")
@@ -331,14 +348,21 @@ fun App(st: AppState, poolPresets: Presets, teamPresets: Presets, prefs: SharedP
     var dialog by remember { mutableStateOf<String?>(null) }
     var teamDisplay by remember { mutableStateOf<List<Agent?>>(emptyList()) }
     var teamError by remember { mutableStateOf<String?>(null) }
-    var icons by remember { mutableStateOf(loadIconCache(prefs)) }
-
     LaunchedEffect(Unit) {
         try {
-            val m = fetchIcons()
-            if (m.isNotEmpty()) {
-                icons = m
-                prefs.edit().putString("icons", m.entries.joinToString("\n") { "${it.key}|${it.value}" }).apply()
+            val fresh = fetchAgents()
+            if (fresh.isNotEmpty()) {
+                val known = prefs.getString("known", null)
+                    ?.split(",")?.filter { it.isNotBlank() }?.toSet()
+                    ?: AGENTS.map { it.name }.toSet()
+                val newOnes = fresh.map { it.name }.filter { it !in known }
+                newOnes.forEach { if (it !in st.pool) st.pool.add(it) }
+                agentList.value = fresh
+                saveAgentCache(prefs, fresh)
+                prefs.edit().putString("known", (known + fresh.map { it.name }).joinToString(",")).apply()
+                if (newOnes.isNotEmpty()) {
+                    Toast.makeText(ctx, "Nuevo agente: ${newOnes.joinToString()}", Toast.LENGTH_LONG).show()
+                }
             }
         } catch (e: Exception) {
         }
@@ -490,7 +514,7 @@ fun App(st: AppState, poolPresets: Presets, teamPresets: Presets, prefs: SharedP
                 ) {
                     Text("${i + 1}", color = Color.Gray, modifier = Modifier.width(24.dp))
                     if (a != null) {
-                        AgentImage(icons[a.name.lowercase()], 48.dp)
+                        AgentImage(a.icon, 48.dp)
                         Spacer(Modifier.width(10.dp))
                     }
                     Text(
@@ -526,7 +550,7 @@ fun App(st: AppState, poolPresets: Presets, teamPresets: Presets, prefs: SharedP
             title = { Text("Ganador") },
             text = {
                 Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                    AgentImage(icons[w.name.lowercase()], 160.dp)
+                    AgentImage(w.icon, 160.dp)
                     Spacer(Modifier.height(8.dp))
                     Text(w.name.uppercase(), fontSize = 40.sp, fontWeight = FontWeight.Black, color = w.role.color)
                     Text(w.role.label, color = Color.Gray)
