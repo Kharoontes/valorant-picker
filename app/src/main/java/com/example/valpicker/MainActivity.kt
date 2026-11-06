@@ -32,6 +32,14 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.Dp
+import coil.compose.AsyncImage
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -173,6 +181,48 @@ class TonePlayer(private val tone: Int, private val ms: Int) {
     }
 }
 
+suspend fun fetchIcons(): Map<String, String> = withContext(Dispatchers.IO) {
+    val conn = URL("https://valorant-api.com/v1/agents?isPlayableCharacter=true")
+        .openConnection() as HttpURLConnection
+    conn.connectTimeout = 10000
+    conn.readTimeout = 10000
+    try {
+        val text = conn.inputStream.bufferedReader().use { it.readText() }
+        val arr = JSONObject(text).getJSONArray("data")
+        val m = mutableMapOf<String, String>()
+        for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            val icon = o.optString("displayIcon")
+            if (icon.isNotBlank()) m[o.getString("displayName").lowercase()] = icon
+        }
+        m
+    } finally {
+        conn.disconnect()
+    }
+}
+
+fun loadIconCache(prefs: SharedPreferences): Map<String, String> {
+    val m = mutableMapOf<String, String>()
+    (prefs.getString("icons", "") ?: "").split("\n").forEach { l ->
+        val i = l.indexOf('|')
+        if (i > 0) m[l.substring(0, i)] = l.substring(i + 1)
+    }
+    return m
+}
+
+@Composable
+fun AgentImage(url: String?, size: Dp) {
+    if (url == null) {
+        Spacer(Modifier.size(size))
+    } else {
+        AsyncImage(
+            model = url,
+            contentDescription = null,
+            modifier = Modifier.size(size).clip(CircleShape)
+        )
+    }
+}
+
 fun rollTeam(st: AppState, avail: List<Agent>): List<Agent>? {
     var roles: List<Role?> = st.slotRoles.take(st.teamSize)
     if (st.randomizeRoles) roles = roles.shuffled()
@@ -281,6 +331,18 @@ fun App(st: AppState, poolPresets: Presets, teamPresets: Presets, prefs: SharedP
     var dialog by remember { mutableStateOf<String?>(null) }
     var teamDisplay by remember { mutableStateOf<List<Agent?>>(emptyList()) }
     var teamError by remember { mutableStateOf<String?>(null) }
+    var icons by remember { mutableStateOf(loadIconCache(prefs)) }
+
+    LaunchedEffect(Unit) {
+        try {
+            val m = fetchIcons()
+            if (m.isNotEmpty()) {
+                icons = m
+                prefs.edit().putString("icons", m.entries.joinToString("\n") { "${it.key}|${it.value}" }).apply()
+            }
+        } catch (e: Exception) {
+        }
+    }
 
     val tickSound = remember { TonePlayer(ToneGenerator.TONE_CDMA_PIP, 25) }
     val winSound = remember { TonePlayer(ToneGenerator.TONE_PROP_ACK, 350) }
@@ -427,6 +489,10 @@ fun App(st: AppState, poolPresets: Presets, teamPresets: Presets, prefs: SharedP
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("${i + 1}", color = Color.Gray, modifier = Modifier.width(24.dp))
+                    if (a != null) {
+                        AgentImage(icons[a.name.lowercase()], 48.dp)
+                        Spacer(Modifier.width(10.dp))
+                    }
                     Text(
                         a?.name?.uppercase() ?: "?",
                         fontSize = 20.sp, fontWeight = FontWeight.Bold,
@@ -460,6 +526,8 @@ fun App(st: AppState, poolPresets: Presets, teamPresets: Presets, prefs: SharedP
             title = { Text("Ganador") },
             text = {
                 Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                    AgentImage(icons[w.name.lowercase()], 160.dp)
+                    Spacer(Modifier.height(8.dp))
                     Text(w.name.uppercase(), fontSize = 40.sp, fontWeight = FontWeight.Black, color = w.role.color)
                     Text(w.role.label, color = Color.Gray)
                     TextButton(onClick = { st.pool.remove(w.name); winner = null }) {
