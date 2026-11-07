@@ -93,6 +93,9 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLDecoder
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.TimeZone
 import java.net.URLEncoder
 import java.util.Locale
 import kotlin.math.cos
@@ -522,6 +525,20 @@ fun rankEs(n: String): String = n
     .replace("Radiant", "Radiante", true).replace("Unranked", "Sin rango", true)
     .replace("Unrated", "Sin rango", true)
 
+fun fmtDate(iso: String): String = try {
+    val parser = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
+    parser.timeZone = TimeZone.getTimeZone("UTC")
+    var t = parser.parse(iso.take(19))!!.time
+    val off = Regex("""([+-])(\d{2}):?(\d{2})$""").find(iso.substring(19))
+    if (off != null) {
+        val ms = (off.groupValues[2].toInt() * 60 + off.groupValues[3].toInt()) * 60000L
+        t -= if (off.groupValues[1] == "+") ms else -ms
+    }
+    SimpleDateFormat("dd MMM · HH:mm", Locale("es")).format(Date(t))
+} catch (e: Exception) {
+    ""
+}
+
 fun modeEs(id: String): String = when (id.lowercase()) {
     "competitive" -> "Competitivo"
     "unrated" -> "Normal"
@@ -545,7 +562,7 @@ fun Modifier.card(r: Dp = 20.dp, border: Color = OUTLINE): Modifier {
 class ApiError(msg: String) : Exception(msg)
 
 data class MatchRow(
-    val map: String, val mode: String, val agent: String,
+    val map: String, val mode: String, val date: String, val agent: String,
     val k: Int, val d: Int, val a: Int, val won: Boolean?, val score: String, val acs: Int
 )
 
@@ -684,6 +701,7 @@ suspend fun fetchProfile(riotId: String, key: String): Profile {
                 MatchRow(
                     map = md.optJSONObject("map")?.optString("name") ?: "",
                     mode = modeEs(queueId),
+                    date = fmtDate(md.optString("started_at")),
                     agent = me.optJSONObject("agent")?.optString("name") ?: "",
                     k = k, d = d, a = a, won = won,
                     score = "$rw–$rl",
@@ -740,7 +758,8 @@ class MainActivity : ComponentActivity() {
                 )
             ) {
                 CompositionLocalProvider(
-                    LocalTextStyle provides LocalTextStyle.current.merge(TextStyle(fontFamily = FontFamily.Monospace))
+                    LocalTextStyle provides LocalTextStyle.current.merge(TextStyle(fontFamily = FontFamily.Monospace)),
+                    LocalContentColor provides TEXT
                 ) {
                     Box(
                         Modifier.fillMaxSize().background(
@@ -922,7 +941,7 @@ fun LoadingScreen(status: String, done: Int, total: Int, canSkip: Boolean, onSki
             Spacer(Modifier.width(8.dp))
             Text("VALORANT", fontSize = 13.sp, color = DIM, letterSpacing = 6.sp)
         }
-        Text("PICKER", fontSize = 38.sp, fontWeight = FontWeight.Black, letterSpacing = 6.sp)
+        Text("PICKER", fontSize = 38.sp, fontWeight = FontWeight.Black, letterSpacing = 6.sp, color = TEXT)
         Spacer(Modifier.height(36.dp))
         if (total > 0) {
             LinearProgressIndicator(
@@ -1103,6 +1122,7 @@ fun App(st: AppState, prefs: SharedPreferences) {
 
     Scaffold(
         containerColor = Color.Transparent,
+        contentColor = TEXT,
         topBar = {
             Box(Modifier.fillMaxWidth().background(RED).padding(horizontal = 8.dp, vertical = 10.dp)) {
                 Text(
@@ -1314,7 +1334,7 @@ fun TeamTab(st: AppState) {
                 ) {
                     MapThumb(current?.icon, st.mapName)
                     Spacer(Modifier.width(12.dp))
-                    Text(st.mapName.uppercase(), fontWeight = FontWeight.Bold, letterSpacing = 2.sp, modifier = Modifier.weight(1f))
+                    Text(st.mapName.uppercase(), fontWeight = FontWeight.Bold, letterSpacing = 2.sp, color = TEXT, modifier = Modifier.weight(1f))
                     if (st.mapName in POOL) Text("●", color = GREEN, fontSize = 10.sp)
                     Icon(Icons.Filled.ArrowDropDown, contentDescription = "Cambiar mapa", tint = DIM)
                 }
@@ -1470,7 +1490,7 @@ fun StatBox(label: String, value: String, modifier: Modifier = Modifier) {
         modifier.card(16.dp).padding(vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text(value, fontSize = 20.sp, fontWeight = FontWeight.Black)
+        Text(value, fontSize = 20.sp, fontWeight = FontWeight.Black, color = TEXT)
         Label(label)
     }
 }
@@ -1547,7 +1567,7 @@ fun ProfileTab(st: AppState) {
                 }
                 Column(Modifier.weight(1f)) {
                     Label("01 Jugador")
-                    Text(profile.name.uppercase(), fontSize = 20.sp, fontWeight = FontWeight.Black, maxLines = 1)
+                    Text(profile.name.uppercase(), fontSize = 20.sp, fontWeight = FontWeight.Black, maxLines = 1, color = TEXT)
                     Row {
                         Text("#${profile.tag}", color = RED, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.width(10.dp))
@@ -1571,7 +1591,7 @@ fun ProfileTab(st: AppState) {
             }
             Column(Modifier.weight(1f)) {
                 Label("02 Rango")
-                Text(rankEs(profile.tierName ?: "Sin rango").uppercase(), fontSize = 22.sp, fontWeight = FontWeight.Black)
+                Text(rankEs(profile.tierName ?: "Sin rango").uppercase(), fontSize = 22.sp, fontWeight = FontWeight.Black, color = TEXT)
                 if (profile.rr != null) {
                     Row {
                         Text("${profile.rr} RR", color = RED, fontWeight = FontWeight.Bold)
@@ -1621,8 +1641,9 @@ fun ProfileTab(st: AppState) {
                         )
                         Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
-                            Text(m.map.uppercase(), fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            Text(m.mode, fontSize = 11.sp, color = DIM)
+                            Text(m.map.uppercase(), fontWeight = FontWeight.Bold, fontSize = 13.sp, color = TEXT)
+                            Text(m.mode, fontSize = 11.sp, color = TEXT)
+                            if (m.date.isNotBlank()) Text(m.date, fontSize = 11.sp, color = DIM)
                         }
                         Column(horizontalAlignment = Alignment.End) {
                             Text(
