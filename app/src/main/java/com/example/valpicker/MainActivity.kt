@@ -12,6 +12,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.CubicBezierEasing
@@ -29,12 +30,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Casino
 import androidx.compose.material.icons.filled.GpsFixed
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -45,22 +48,28 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
 import coil.Coil
 import coil.ImageLoader
 import coil.compose.AsyncImage
@@ -84,25 +93,31 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLDecoder
+import java.net.URLEncoder
 import java.util.Locale
+import kotlin.math.cos
 import kotlin.math.roundToInt
+import kotlin.math.sin
 import kotlin.random.Random
 
 // ============================================================
 //  DATOS
 // ============================================================
 
-val BG = Color(0xFF0F1923)
-val SURFACE = Color(0xFF1B2733)
-val OUTLINE = Color(0xFF2B3948)
-val RED = Color(0xFFFF4655)
+val BG = Color(0xFF121214)
+val SURFACE = Color(0xFF1C1C1F)
+val OUTLINE = Color(0xFF2E2E32)
+val RED = Color(0xFFF2432B)
+val INK = Color(0xFF0B0B0C)
+val TEXT = Color(0xFFEDEDED)
+val DIM = Color(0xFF8E8E93)
 val GREEN = Color(0xFF66D18F)
 
 enum class Role(val label: String, val es: String, val color: Color) {
-    Controller("Controller", "Controlador", Color(0xFF4FC3F7)),
-    Sentinel("Sentinel", "Centinela", Color(0xFF81C784)),
-    Initiator("Initiator", "Iniciador", Color(0xFFFFB74D)),
-    Duelist("Duelist", "Duelista", Color(0xFFFF4655))
+    Controller("Controller", "Controlador", Color(0xFF8FB8D6)),
+    Sentinel("Sentinel", "Centinela", Color(0xFF9CC9A1)),
+    Initiator("Initiator", "Iniciador", Color(0xFFE0B27A)),
+    Duelist("Duelist", "Duelista", Color(0xFFFF4B21))
 }
 
 fun roleOf(name: String): Role? = when (name.trim().lowercase()) {
@@ -161,7 +176,10 @@ val mapList = mutableStateOf(POOL.map { MapInfo(it, null) })
 // Porcentajes de victoria por mapa (solo en memoria, se piden al abrir cada mapa)
 val STATS = mutableStateMapOf<String, MapStats>()
 
-val POINTER_COLORS = listOf(RED, Color.White, Color(0xFFFFD54F), Color(0xFF4FC3F7))
+// Clave de HenrikDev (perfil). Puedes cambiarla desde Ajustes.
+const val DEFAULT_API_KEY = "HDEV-8458d668-9612-44d4-b8c9-9e8de8ff6914"
+
+val POINTER_COLORS = listOf(RED, Color.White, Color(0xFFFFD54F), Color(0xFF8FB8D6))
 
 val BROWSER_UA =
     "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) " +
@@ -426,8 +444,13 @@ class AppState(prefs: SharedPreferences) {
     var pointerIdx by mutableStateOf(0)
     var credits by mutableStateOf(9000)
 
+    var riotId by mutableStateOf("Sova o Nada#COSTA")
+    var apiKey by mutableStateOf(DEFAULT_API_KEY)
+
     init {
         prefs.getString("state3", null)?.let { decode(it) }
+        riotId = prefs.getString("riot", riotId) ?: riotId
+        apiKey = prefs.getString("hkey", null)?.takeIf { it.isNotBlank() } ?: DEFAULT_API_KEY
     }
 
     fun available(): List<Agent> = AGENTS.filter { it.role !in roleOff }
@@ -464,11 +487,8 @@ class AppState(prefs: SharedPreferences) {
 }
 
 // ============================================================
-//  RECOMENDACIONES SEGÚN % DE VICTORIA EN EL MAPA
+//  UTILIDADES
 // ============================================================
-
-data class Advice(val text: String, val ok: Boolean)
-data class Pick(val agent: Agent, val wr: WR, val adj: Float, val score: Float, val bonus: Float)
 
 val PRIORITY = listOf(Role.Controller, Role.Initiator, Role.Duelist, Role.Sentinel)
 
@@ -477,63 +497,216 @@ fun fmt(f: Float): String = "%.1f%%".format(Locale.US, f)
 // Acerca hacia 50% los porcentajes con pocas partidas, para no fiarse de muestras pequeñas
 fun adjWr(w: WR): Float = 50f + (w.wr - 50f) * w.n / (w.n + 400f)
 
-fun roleBonus(role: Role, count: Int): Float = when {
-    count == 0 -> when (role) {
-        Role.Controller -> 3f
-        Role.Initiator -> 2f
-        Role.Duelist -> 2f
-        Role.Sentinel -> 1.5f
-    }
-    count == 1 -> 0f
-    count == 2 -> if (role == Role.Duelist) -1.5f else -2.5f
-    else -> -5f
+fun wrColor(w: Float): Color = if (w >= 52f) GREEN else if (w >= 50f) TEXT else RED
+
+fun topByRole(role: Role, stats: Map<String, WR>, k: Int = 3): List<Pair<Agent, WR>> =
+    AGENTS.filter { it.role == role }
+        .mapNotNull { a -> stats[a.name]?.takeIf { it.n >= 30 }?.let { a to it } }
+        .sortedByDescending { adjWr(it.second) }
+        .take(k)
+
+fun catColor(c: String): Color = when (c) {
+    "Sidearm" -> Color(0xFF9AA0A6)
+    "SMG" -> Color(0xFF6CB4EE)
+    "Shotgun" -> Color(0xFFF2B35E)
+    "Rifle" -> Color(0xFFF2432B)
+    "Sniper" -> Color(0xFF7BC98F)
+    else -> Color(0xFFB48CF2)
 }
 
-fun recommend(team: List<Agent>, stats: Map<String, WR>): List<Pick> {
-    val names = team.map { it.name }.toSet()
-    return AGENTS.filter { it.name !in names }.mapNotNull { a ->
-        val w = stats[a.name] ?: return@mapNotNull null
-        if (w.n < 30) return@mapNotNull null
-        val adj = adjWr(w)
-        val bonus = roleBonus(a.role, team.count { it.role == a.role })
-        Pick(a, w, adj, adj + bonus, bonus)
-    }.sortedByDescending { it.score }
+fun rankEs(n: String): String = n
+    .replace("Iron", "Hierro", true).replace("Bronze", "Bronce", true)
+    .replace("Silver", "Plata", true).replace("Gold", "Oro", true)
+    .replace("Platinum", "Platino", true).replace("Diamond", "Diamante", true)
+    .replace("Ascendant", "Ascendente", true).replace("Immortal", "Inmortal", true)
+    .replace("Radiant", "Radiante", true).replace("Unranked", "Sin rango", true)
+    .replace("Unrated", "Sin rango", true)
+
+fun modeEs(id: String): String = when (id.lowercase()) {
+    "competitive" -> "Competitivo"
+    "unrated" -> "Normal"
+    "swiftplay" -> "Partida rápida"
+    "spikerush" -> "Spike Rush"
+    "deathmatch" -> "Combate a muerte"
+    "premier" -> "Premier"
+    "custom" -> "Personalizada"
+    else -> id.replaceFirstChar { it.uppercase() }
 }
 
-fun reasonFor(p: Pick, team: List<Agent>, map: String): String {
-    val base = "${fmt(p.wr.wr)} de victorias en $map con ${p.wr.n} partidas"
-    val same = team.count { it.role == p.agent.role }
-    return when {
-        p.bonus > 0f -> "$base. Cubre el rol que le falta a tu equipo: ${p.agent.role.es.lowercase()}."
-        p.bonus < 0f -> "$base. Ojo: ya tienes $same de este rol."
-        else -> "$base."
+fun Modifier.card(r: Dp = 20.dp, border: Color = OUTLINE): Modifier {
+    val shape = RoundedCornerShape(r)
+    return this.clip(shape).background(SURFACE).border(1.dp, border, shape)
+}
+
+// ============================================================
+//  PERFIL (API de HenrikDev)
+// ============================================================
+
+class ApiError(msg: String) : Exception(msg)
+
+data class MatchRow(
+    val map: String, val mode: String, val agent: String,
+    val k: Int, val d: Int, val a: Int, val won: Boolean?, val score: String, val acs: Int
+)
+
+data class Profile(
+    val name: String, val tag: String, val level: Int, val region: String, val card: String?,
+    val tierName: String?, val tierIcon: String?, val rr: Int?, val change: Int?,
+    val peakName: String?, val peakIcon: String?,
+    val matches: List<MatchRow>, val kd: Float?, val winPct: Float?, val hs: Float?, val adr: Int?
+)
+
+val profileState = mutableStateOf<Profile?>(null)
+var profileLoadedFor = ""
+
+suspend fun hGet(url: String, key: String): String = withContext(Dispatchers.IO) {
+    val conn = URL(url).openConnection() as HttpURLConnection
+    conn.connectTimeout = 12000
+    conn.readTimeout = 25000
+    conn.setRequestProperty("Authorization", key.trim())
+    conn.setRequestProperty("Accept", "application/json")
+    try {
+        val code = conn.responseCode
+        if (code in 200..299) {
+            conn.inputStream.bufferedReader().use { it.readText() }
+        } else {
+            throw ApiError(
+                when (code) {
+                    401, 403 -> "API key inválida"
+                    404 -> "Cuenta no encontrada"
+                    429 -> "Demasiadas solicitudes. Espera un momento"
+                    else -> "Error $code"
+                }
+            )
+        }
+    } finally {
+        conn.disconnect()
     }
 }
 
-fun plural(s: String) = if (s.endsWith("r")) s + "es" else s + "s"
-
-fun missingReason(r: Role) = when (r) {
-    Role.Controller -> "sin humos te costará controlar las zonas"
-    Role.Initiator -> "sin información ni apoyo para entrar a los sitios"
-    Role.Duelist -> "nadie que abra espacio en los enfrentamientos"
-    Role.Sentinel -> "nadie que asegure los flancos y el retake"
+suspend fun fetchTierIcons(): Map<Int, String> {
+    val arr = JSONObject(httpGet("https://valorant-api.com/v1/competitivetiers")).getJSONArray("data")
+    val tiers = arr.getJSONObject(arr.length() - 1).getJSONArray("tiers")
+    val m = mutableMapOf<Int, String>()
+    for (i in 0 until tiers.length()) {
+        val t = tiers.getJSONObject(i)
+        val ic = t.str("largeIcon")
+        if (ic != null) m[t.optInt("tier")] = ic
+    }
+    return m
 }
 
-fun teamAdvice(team: List<Agent>): List<Advice> {
-    if (team.isEmpty()) return emptyList()
-    val out = mutableListOf<Advice>()
-    val counts = Role.values().associateWith { r -> team.count { it.role == r } }
-    PRIORITY.filter { counts[it] == 0 }.forEach {
-        out += Advice("Sin ${it.es.lowercase()}: ${missingReason(it)}.", false)
+suspend fun fetchProfile(riotId: String, key: String): Profile {
+    val parts = riotId.split("#", limit = 2)
+    if (parts.size < 2 || parts[0].isBlank() || parts[1].isBlank()) throw ApiError("Riot ID inválido (nombre#TAG)")
+    fun enc(s: String) = URLEncoder.encode(s.trim(), "UTF-8").replace("+", "%20")
+    val n = enc(parts[0])
+    val t = enc(parts[1])
+    val base = "https://api.henrikdev.xyz/valorant"
+
+    val acc = JSONObject(hGet("$base/v2/account/$n/$t", key)).getJSONObject("data")
+    val region = acc.str("region") ?: "na"
+    val puuid = acc.optString("puuid")
+    val tiers = try {
+        fetchTierIcons()
+    } catch (e: Exception) {
+        emptyMap()
     }
-    Role.values().filter { counts[it]!! >= 3 }.forEach {
-        out += Advice("Hay ${counts[it]} ${plural(it.es.lowercase())}: diversifica tu composición.", false)
+
+    var tierName: String? = null
+    var tierIcon: String? = null
+    var rr: Int? = null
+    var change: Int? = null
+    var peakName: String? = null
+    var peakIcon: String? = null
+    try {
+        val mmr = JSONObject(hGet("$base/v3/mmr/$region/pc/$n/$t", key)).getJSONObject("data")
+        val cur = mmr.getJSONObject("current")
+        val ct = cur.getJSONObject("tier")
+        tierName = ct.str("name")
+        tierIcon = tiers[ct.optInt("id")]
+        rr = cur.optInt("rr")
+        change = cur.optInt("last_change")
+        val peak = mmr.optJSONObject("peak")
+        val pt = peak?.optJSONObject("tier")
+        if (pt != null) {
+            peakName = pt.str("name")
+            peakIcon = tiers[pt.optInt("id")]
+        }
+    } catch (e: Exception) {
     }
-    if (out.isEmpty()) {
-        out += if (team.size >= 5) Advice("Composición equilibrada: tienes todos los roles cubiertos.", true)
-        else Advice("Vas bien: ya cubres todos los roles.", true)
+
+    val rows = mutableListOf<MatchRow>()
+    var kills = 0; var deaths = 0; var head = 0; var shots = 0; var dmg = 0; var rounds = 0
+    var wins = 0; var counted = 0
+    try {
+        val arr = JSONObject(hGet("$base/v4/matches/$region/pc/$n/$t?size=10", key)).getJSONArray("data")
+        for (i in 0 until arr.length()) {
+            val m = arr.getJSONObject(i)
+            val md = m.getJSONObject("metadata")
+            val players = m.getJSONArray("players")
+            var me: JSONObject? = null
+            for (j in 0 until players.length()) {
+                val pl = players.getJSONObject(j)
+                if (pl.optString("puuid") == puuid) {
+                    me = pl
+                    break
+                }
+            }
+            if (me == null) continue
+            val ps = me.getJSONObject("stats")
+            val teamId = me.optString("team_id")
+            var won: Boolean? = null
+            var rw = 0
+            var rl = 0
+            val teams = m.optJSONArray("teams")
+            if (teams != null) {
+                for (x in 0 until teams.length()) {
+                    val tm = teams.getJSONObject(x)
+                    if (tm.optString("team_id") == teamId) {
+                        won = tm.optBoolean("won")
+                        val r = tm.getJSONObject("rounds")
+                        rw = r.optInt("won")
+                        rl = r.optInt("lost")
+                    }
+                }
+            }
+            val tr = (rw + rl).coerceAtLeast(1)
+            val k = ps.optInt("kills")
+            val d = ps.optInt("deaths")
+            val a = ps.optInt("assists")
+            val hs = ps.optInt("headshots")
+            val bs = ps.optInt("bodyshots")
+            val ls = ps.optInt("legshots")
+            val dealt = ps.optJSONObject("damage")?.optInt("dealt") ?: 0
+            val queueId = md.optJSONObject("queue")?.optString("id") ?: ""
+            rows.add(
+                MatchRow(
+                    map = md.optJSONObject("map")?.optString("name") ?: "",
+                    mode = modeEs(queueId),
+                    agent = me.optJSONObject("agent")?.optString("name") ?: "",
+                    k = k, d = d, a = a, won = won,
+                    score = "$rw–$rl",
+                    acs = ps.optInt("score") / tr
+                )
+            )
+            kills += k; deaths += d; head += hs; shots += hs + bs + ls; dmg += dealt; rounds += tr
+            counted++
+            if (won == true) wins++
+        }
+    } catch (e: Exception) {
     }
-    return out
+
+    return Profile(
+        name = acc.str("name") ?: parts[0], tag = acc.str("tag") ?: parts[1],
+        level = acc.optInt("account_level"), region = region, card = acc.str("card"),
+        tierName = tierName, tierIcon = tierIcon, rr = rr, change = change,
+        peakName = peakName, peakIcon = peakIcon, matches = rows,
+        kd = if (counted > 0) kills.toFloat() / deaths.coerceAtLeast(1) else null,
+        winPct = if (counted > 0) wins * 100f / counted else null,
+        hs = if (shots > 0) head * 100f / shots else null,
+        adr = if (counted > 0 && rounds > 0) dmg / rounds else null
+    )
 }
 
 // ============================================================
@@ -543,7 +716,6 @@ fun teamAdvice(team: List<Agent>): List<Advice> {
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val prefs = getSharedPreferences("wheel", MODE_PRIVATE)
         Coil.setImageLoader(
             ImageLoader.Builder(this)
                 .respectCacheHeaders(false)
@@ -556,18 +728,27 @@ class MainActivity : ComponentActivity() {
                 }
                 .build()
         )
+        val prefs = getSharedPreferences("wheel", MODE_PRIVATE)
         loadCaches(prefs)
         val st = AppState(prefs)
         setContent {
             MaterialTheme(
                 colorScheme = darkColorScheme(
-                    primary = RED,
-                    background = BG,
-                    surface = SURFACE
+                    primary = RED, onPrimary = INK,
+                    background = BG, onBackground = TEXT,
+                    surface = SURFACE, onSurface = TEXT
                 )
             ) {
-                Surface(Modifier.fillMaxSize(), color = BG) {
-                    App(st, prefs)
+                CompositionLocalProvider(
+                    LocalTextStyle provides LocalTextStyle.current.merge(TextStyle(fontFamily = FontFamily.Monospace))
+                ) {
+                    Box(
+                        Modifier.fillMaxSize().background(
+                            Brush.verticalGradient(0f to Color(0xFF2B2119), 0.5f to BG, 1f to BG)
+                        )
+                    ) {
+                        App(st, prefs)
+                    }
                 }
             }
         }
@@ -579,15 +760,19 @@ class MainActivity : ComponentActivity() {
 // ============================================================
 
 @Composable
+fun Label(text: String, color: Color = DIM) {
+    Text(text.uppercase(), fontSize = 10.sp, color = color, letterSpacing = 1.5.sp, fontWeight = FontWeight.Medium)
+}
+
+@Composable
 fun AgentImage(url: String?, modifier: Modifier, fallback: String = "") {
     if (url == null) {
         Box(modifier.clip(CircleShape).background(OUTLINE), contentAlignment = Alignment.Center) {
-            Text(fallback.take(1), fontWeight = FontWeight.Bold, color = Color.Gray)
+            Text(fallback.take(1), fontWeight = FontWeight.Bold, color = DIM)
         }
     } else {
         AsyncImage(
-            model = url,
-            contentDescription = fallback,
+            model = url, contentDescription = fallback,
             modifier = modifier.clip(CircleShape).background(OUTLINE)
         )
     }
@@ -598,28 +783,12 @@ fun RoleIcon(role: Role, size: Dp) {
     val url = roleInfo.value[role]?.icon
     if (url != null) {
         AsyncImage(
-            model = url,
-            contentDescription = role.es,
+            model = url, contentDescription = role.es,
             colorFilter = ColorFilter.tint(role.color),
             modifier = Modifier.size(size)
         )
     } else {
         Box(Modifier.size(size * 0.6f).background(role.color, CircleShape))
-    }
-}
-
-@Composable
-fun SectionTitle(text: String, trailing: (@Composable () -> Unit)? = null) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            text.uppercase(), fontSize = 12.sp, color = Color.Gray, letterSpacing = 2.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).weight(1f)
-        )
-        if (trailing != null) {
-            trailing()
-            Spacer(Modifier.width(8.dp))
-        }
     }
 }
 
@@ -636,29 +805,37 @@ fun MapThumb(url: String?, name: String) {
     }
 }
 
+data class WheelItem(val label: String, val tint: Color)
+
 @Composable
-fun Wheel(agents: List<Agent>, rotation: () -> Float, pointer: Color, modifier: Modifier = Modifier) {
+fun Wheel(items: List<WheelItem>, rotation: () -> Float, pointer: Color, modifier: Modifier = Modifier) {
     val paint = remember {
         Paint().apply {
             isAntiAlias = true
-            typeface = Typeface.DEFAULT_BOLD
+            typeface = Typeface.MONOSPACE
             textAlign = Paint.Align.RIGHT
-            color = 0xFF0F1923.toInt()
+            color = 0xFFEDEDED.toInt()
         }
     }
-    Canvas(modifier.aspectRatio(1f)) {
-        val n = agents.size
+    Canvas(modifier) {
+        val n = items.size
         if (n == 0) return@Canvas
         val cx = size.width / 2f
         val cy = size.height / 2f
-        val r = size.minDimension / 2f * 0.94f
+        val half = size.minDimension / 2f
+        val r = half * 0.93f
         val sweep = 360f / n
-        paint.textSize = r * (if (n > 26) 0.065f else 0.08f)
+        paint.textSize = r * (if (n > 26) 0.062f else 0.076f)
         rotate(rotation(), pivot = Offset(cx, cy)) {
-            agents.forEachIndexed { i, a ->
+            items.forEachIndexed { i, it ->
                 val start = -90f + i * sweep
                 drawArc(
-                    color = a.role.color.copy(alpha = if (i % 2 == 0) 0.95f else 0.7f),
+                    color = if (i % 2 == 0) Color(0xFF1F1F23) else Color(0xFF28282D),
+                    startAngle = start, sweepAngle = sweep, useCenter = true,
+                    topLeft = Offset(cx - r, cy - r), size = Size(2 * r, 2 * r)
+                )
+                drawArc(
+                    color = it.tint.copy(alpha = 0.2f),
                     startAngle = start, sweepAngle = sweep, useCenter = true,
                     topLeft = Offset(cx - r, cy - r), size = Size(2 * r, 2 * r)
                 )
@@ -672,16 +849,28 @@ fun Wheel(agents: List<Agent>, rotation: () -> Float, pointer: Color, modifier: 
                     val nc = c.nativeCanvas
                     nc.save()
                     nc.rotate(start + sweep / 2f, cx, cy)
-                    nc.drawText(a.name, cx + r - r * 0.06f, cy + paint.textSize / 3f, paint)
+                    nc.drawText(it.label, cx + r - r * 0.07f, cy + paint.textSize / 3f, paint)
                     nc.restore()
                 }
             }
+            // anillo de puntos
+            val dots = 90
+            for (i in 0 until dots) {
+                val ang = Math.toRadians(i * 360.0 / dots)
+                val rr = half * 0.975f
+                drawCircle(
+                    color = if (i % 15 == 0) RED else Color(0xFF55555A),
+                    radius = if (i % 15 == 0) 2.6f else 1.6f,
+                    center = Offset(cx + (rr * Math.cos(ang)).toFloat(), cy + (rr * Math.sin(ang)).toFloat())
+                )
+            }
         }
-        drawCircle(BG, radius = r * 0.12f, center = Offset(cx, cy))
+        drawCircle(BG, radius = r * 0.13f, center = Offset(cx, cy))
+        drawCircle(RED, radius = r * 0.035f, center = Offset(cx, cy))
         val tri = Path().apply {
-            moveTo(cx - r * 0.06f, cy - r - r * 0.05f)
-            lineTo(cx + r * 0.06f, cy - r - r * 0.05f)
-            lineTo(cx, cy - r + r * 0.1f)
+            moveTo(cx - r * 0.06f, cy - half - r * 0.0f)
+            lineTo(cx + r * 0.06f, cy - half - r * 0.0f)
+            lineTo(cx, cy - half + r * 0.13f)
             close()
         }
         drawPath(tri, pointer)
@@ -689,44 +878,69 @@ fun Wheel(agents: List<Agent>, rotation: () -> Float, pointer: Color, modifier: 
 }
 
 @Composable
+fun FitWheel(items: List<WheelItem>, rotation: () -> Float, pointer: Color, modifier: Modifier) {
+    BoxWithConstraints(modifier, contentAlignment = Alignment.Center) {
+        val s = if (maxWidth < maxHeight) maxWidth else maxHeight
+        Wheel(items, rotation, pointer, Modifier.size(s))
+    }
+}
+
+suspend fun spinWheel(rot: Animatable<Float, AnimationVector1D>, n: Int, seconds: Int, intensity: Int): Int {
+    val idx = Random.nextInt(n)
+    val sweep = 360f / n
+    val jitter = 0.1f + Random.nextFloat() * 0.8f
+    val residue = (((-(idx + jitter) * sweep) % 360f) + 360f) % 360f
+    val cur = rot.value
+    val curMod = ((cur % 360f) + 360f) % 360f
+    val delta = ((residue - curMod) + 360f) % 360f
+    val target = cur + 360f * (3 + intensity) + delta
+    rot.animateTo(target, tween(seconds * 1000, easing = CubicBezierEasing(0.1f, 0.75f, 0.15f, 1f)))
+    return idx
+}
+
+@Composable
 fun BigButton(text: String, enabled: Boolean, onClick: () -> Unit) {
     Button(
         onClick = onClick,
         enabled = enabled,
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(56.dp)
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.fillMaxWidth(0.75f).height(54.dp)
     ) {
-        Text(text, fontSize = 16.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+        Text(text, fontSize = 15.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
     }
 }
 
 @Composable
 fun LoadingScreen(status: String, done: Int, total: Int, canSkip: Boolean, onSkip: () -> Unit) {
     Column(
-        Modifier.fillMaxSize().background(BG).padding(36.dp),
+        Modifier.fillMaxSize().padding(36.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text("VALORANT", fontSize = 14.sp, color = RED, letterSpacing = 8.sp, fontWeight = FontWeight.Bold)
-        Text("PICKER", fontSize = 40.sp, fontWeight = FontWeight.Black, letterSpacing = 4.sp)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(8.dp).background(RED, CircleShape))
+            Spacer(Modifier.width(8.dp))
+            Text("VALORANT", fontSize = 13.sp, color = DIM, letterSpacing = 6.sp)
+        }
+        Text("PICKER", fontSize = 38.sp, fontWeight = FontWeight.Black, letterSpacing = 6.sp)
         Spacer(Modifier.height(36.dp))
         if (total > 0) {
             LinearProgressIndicator(
                 progress = { done.toFloat() / total },
-                modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
+                modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
                 color = RED, trackColor = OUTLINE
             )
         } else {
             LinearProgressIndicator(
-                modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
+                modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
                 color = RED, trackColor = OUTLINE
             )
         }
         Spacer(Modifier.height(14.dp))
-        Text(status, color = Color.Gray, fontSize = 13.sp, textAlign = TextAlign.Center)
+        Label(status)
         Spacer(Modifier.height(10.dp))
         Box(Modifier.height(40.dp)) {
-            if (canSkip) TextButton(onClick = onSkip) { Text("Omitir") }
+            if (canSkip) TextButton(onClick = onSkip) { Text("Omitir", color = DIM) }
         }
     }
 }
@@ -743,17 +957,17 @@ fun App(st: AppState, prefs: SharedPreferences) {
     var showSettings by remember { mutableStateOf(false) }
     var spinning by remember { mutableStateOf(false) }
     var winner by remember { mutableStateOf<Agent?>(null) }
-    var shownWeapon by remember { mutableStateOf<Weapon?>(null) }
+    var weaponWinner by remember { mutableStateOf<Weapon?>(null) }
     val rot = remember { Animatable(0f) }
+    val rotW = remember { Animatable(0f) }
 
-    // Pantalla de carga
     var ready by remember {
         mutableStateOf(
             prefs.getString("agents_json", null) != null &&
                 (prefs.getStringSet("preloaded", null)?.isNotEmpty() == true)
         )
     }
-    var status by remember { mutableStateOf("Conectando con la API…") }
+    var status by remember { mutableStateOf("Conectando") }
     var done by remember { mutableStateOf(0) }
     var total by remember { mutableStateOf(0) }
     var canSkip by remember { mutableStateOf(false) }
@@ -763,14 +977,19 @@ fun App(st: AppState, prefs: SharedPreferences) {
         canSkip = true
     }
 
-    // Guardado automático de ajustes
     LaunchedEffect(Unit) {
-        snapshotFlow { st.encode() }.collect { prefs.edit().putString("state3", it).apply() }
+        snapshotFlow { st.encode() + "\u0001" + st.riotId + "\u0001" + st.apiKey }.collect {
+            prefs.edit()
+                .putString("state3", st.encode())
+                .putString("riot", st.riotId)
+                .putString("hkey", st.apiKey)
+                .apply()
+        }
     }
 
-    // Al iniciar: actualiza agentes, armas y mapas, y precarga TODAS las imágenes
+    // Al iniciar: actualiza agentes, armas y mapas, y descarga las imágenes que falten
     LaunchedEffect(Unit) {
-        status = "Actualizando agentes, armas y mapas…"
+        status = "Actualizando datos"
         coroutineScope {
             val a = async {
                 try {
@@ -822,12 +1041,11 @@ fun App(st: AppState, prefs: SharedPreferences) {
             roleInfo.value.values.mapNotNull { it.icon } +
             weaponList.value.mapNotNull { it.icon } +
             mapList.value.mapNotNull { it.icon }).distinct()
-        // Solo se descargan las imágenes que aún no están guardadas en el dispositivo
         val saved = prefs.getStringSet("preloaded", emptySet()) ?: emptySet()
         val missing = urls.filter { it !in saved }
         total = missing.size
         done = 0
-        status = "Descargando imágenes…"
+        status = "Descargando imágenes"
         val loader = ctx.imageLoader
         val ok = mutableListOf<String>()
         withTimeoutOrNull(45000) {
@@ -851,27 +1069,13 @@ fun App(st: AppState, prefs: SharedPreferences) {
         ready = true
     }
 
-    val avail = st.available()
-
     fun spinAgent() {
         if (spinning) return
         val list = st.available()
         if (list.isEmpty()) return
         scope.launch {
             spinning = true
-            val n = list.size
-            val idx = Random.nextInt(n)
-            val sweep = 360f / n
-            val jitter = 0.1f + Random.nextFloat() * 0.8f
-            val residue = (((-(idx + jitter) * sweep) % 360f) + 360f) % 360f
-            val cur = rot.value
-            val curMod = ((cur % 360f) + 360f) % 360f
-            val delta = ((residue - curMod) + 360f) % 360f
-            val target = cur + 360f * (3 + st.intensity) + delta
-            rot.animateTo(
-                target,
-                tween(st.singleSec * 1000, easing = CubicBezierEasing(0.1f, 0.75f, 0.15f, 1f))
-            )
+            val idx = spinWheel(rot, list.size, st.singleSec, st.intensity)
             winner = list[idx]
             spinning = false
         }
@@ -883,52 +1087,50 @@ fun App(st: AppState, prefs: SharedPreferences) {
         if (list.isEmpty()) return
         scope.launch {
             spinning = true
-            val n = list.size
-            val win = Random.nextInt(n)
-            val steps = ((st.weaponSec * 1000) / 160).coerceAtLeast(8)
-            for (k in 0 until steps) {
-                val idx = (((win - (steps - 1 - k)) % n) + n) % n
-                shownWeapon = list[idx]
-                val f = k.toFloat() / (steps - 1)
-                delay((40 + 360 * f * f).toLong())
-            }
+            val idx = spinWheel(rotW, list.size, st.weaponSec, st.intensity)
+            weaponWinner = list[idx]
             spinning = false
         }
     }
 
     if (!ready) {
         LoadingScreen(
-            status = if (total > 0) "Descargando imágenes $done/$total\nSolo la primera vez: después quedan guardadas" else status,
+            status = if (total > 0) "Descargando imágenes $done/$total" else status,
             done = done, total = total, canSkip = canSkip, onSkip = { ready = true }
         )
         return
     }
 
     Scaffold(
-        containerColor = BG,
+        containerColor = Color.Transparent,
         topBar = {
-            Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp)) {
+            Box(Modifier.fillMaxWidth().background(RED).padding(horizontal = 8.dp, vertical = 10.dp)) {
                 Text(
                     when (tab) {
                         0 -> "AGENTES"
-                        1 -> "TU EQUIPO"
-                        else -> "ARMAS"
+                        1 -> "EQUIPO"
+                        2 -> "ARMAS"
+                        else -> "PERFIL"
                     },
-                    fontSize = 22.sp, fontWeight = FontWeight.Black, letterSpacing = 3.sp,
+                    fontSize = 20.sp, fontWeight = FontWeight.Black, letterSpacing = 5.sp, color = INK,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.align(Alignment.Center)
                 )
-                IconButton(onClick = { showSettings = true }, modifier = Modifier.align(Alignment.CenterEnd)) {
-                    Icon(Icons.Filled.Settings, contentDescription = "Ajustes", tint = Color.Gray)
+                IconButton(
+                    onClick = { showSettings = true },
+                    modifier = Modifier.align(Alignment.CenterEnd).size(36.dp)
+                ) {
+                    Icon(Icons.Filled.Settings, contentDescription = "Ajustes", tint = INK)
                 }
             }
         },
         bottomBar = {
-            NavigationBar(containerColor = Color(0xFF16212C)) {
+            NavigationBar(containerColor = Color(0xFF151517)) {
                 val items = listOf(
-                    Icons.Filled.Person to "Agentes",
-                    Icons.Filled.Lightbulb to "Recomendaciones",
-                    Icons.Filled.GpsFixed to "Armas"
+                    Icons.Filled.Casino to "Agentes",
+                    Icons.Filled.Lightbulb to "Equipo",
+                    Icons.Filled.GpsFixed to "Armas",
+                    Icons.Filled.AccountCircle to "Perfil"
                 )
                 items.forEachIndexed { i, (icon, desc) ->
                     val sel = tab == i
@@ -937,7 +1139,7 @@ fun App(st: AppState, prefs: SharedPreferences) {
                         spring(dampingRatio = 0.6f, stiffness = 400f),
                         label = "navScale"
                     )
-                    val tint by animateColorAsState(if (sel) RED else Color.Gray, tween(220), label = "navTint")
+                    val tint by animateColorAsState(if (sel) RED else DIM, tween(220), label = "navTint")
                     NavigationBarItem(
                         selected = sel,
                         onClick = { tab = i },
@@ -961,31 +1163,59 @@ fun App(st: AppState, prefs: SharedPreferences) {
             label = "tabs"
         ) { t ->
             when (t) {
-                0 -> AgentsTab(st, rot, avail, spinning) { spinAgent() }
+                0 -> AgentsTab(st, rot, spinning) { spinAgent() }
                 1 -> TeamTab(st)
-                else -> WeaponsTab(st, shownWeapon, spinning) { spinWeapon() }
+                2 -> WeaponsTab(st, rotW, spinning) { spinWeapon() }
+                else -> ProfileTab(st)
             }
         }
     }
 
-    // Resultado de agente
     winner?.let { w ->
         AlertDialog(
             onDismissRequest = { winner = null },
+            containerColor = SURFACE,
             confirmButton = {
-                TextButton(onClick = { winner = null; spinAgent() }) { Text("Girar otra vez") }
+                TextButton(onClick = { winner = null; spinAgent() }) { Text("Girar otra vez", color = RED) }
             },
-            dismissButton = { TextButton(onClick = { winner = null }) { Text("Cerrar") } },
+            dismissButton = { TextButton(onClick = { winner = null }) { Text("Cerrar", color = DIM) } },
             text = {
                 Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                     AgentImage(w.icon, Modifier.size(150.dp), w.name)
                     Spacer(Modifier.height(10.dp))
-                    Text(w.name.uppercase(), fontSize = 36.sp, fontWeight = FontWeight.Black, color = w.role.color)
+                    Text(w.name.uppercase(), fontSize = 34.sp, fontWeight = FontWeight.Black, color = w.role.color)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         RoleIcon(w.role, 20.dp)
                         Spacer(Modifier.width(6.dp))
-                        Text(w.role.es, color = Color.Gray)
+                        Text(w.role.es, color = DIM)
                     }
+                }
+            }
+        )
+    }
+
+    weaponWinner?.let { w ->
+        AlertDialog(
+            onDismissRequest = { weaponWinner = null },
+            containerColor = SURFACE,
+            confirmButton = {
+                TextButton(onClick = { weaponWinner = null; spinWeapon() }) { Text("Sortear otra vez", color = RED) }
+            },
+            dismissButton = { TextButton(onClick = { weaponWinner = null }) { Text("Cerrar", color = DIM) } },
+            text = {
+                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                    AsyncImage(
+                        model = w.icon, contentDescription = w.name, contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxWidth().height(110.dp)
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Text(w.name.uppercase(), fontSize = 32.sp, fontWeight = FontWeight.Black)
+                    val price = when (w.cost) {
+                        null -> ""
+                        0 -> " · Gratis"
+                        else -> " · ${w.cost}"
+                    }
+                    Text(catEs(w.cat) + price, color = DIM)
                 }
             }
         )
@@ -999,25 +1229,24 @@ fun App(st: AppState, prefs: SharedPreferences) {
 // ============================================================
 
 @Composable
-fun AgentsTab(
-    st: AppState,
-    rot: Animatable<Float, *>,
-    avail: List<Agent>,
-    spinning: Boolean,
-    onSpin: () -> Unit
-) {
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 16.dp)) {
+fun AgentsTab(st: AppState, rot: Animatable<Float, AnimationVector1D>, spinning: Boolean, onSpin: () -> Unit) {
+    val avail = st.available()
+    val items = avail.map { WheelItem(it.name, it.role.color) }
+    Column(
+        Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).alpha(if (spinning) 0.5f else 1f),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            Modifier.fillMaxWidth().alpha(if (spinning) 0.5f else 1f),
+            horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally)
         ) {
             Role.values().forEach { role ->
                 val on = role !in st.roleOff
                 val shape = RoundedCornerShape(14.dp)
                 Box(
-                    Modifier.weight(1f).height(52.dp).clip(shape)
-                        .background(if (on) role.color.copy(alpha = 0.18f) else SURFACE)
-                        .border(2.dp, if (on) role.color else OUTLINE, shape)
+                    Modifier.size(width = 60.dp, height = 52.dp).clip(shape)
+                        .background(if (on) role.color.copy(alpha = 0.16f) else SURFACE)
+                        .border(1.5.dp, if (on) role.color else OUTLINE, shape)
                         .clickable(enabled = !spinning) {
                             if (on) st.roleOff.add(role) else st.roleOff.remove(role)
                         },
@@ -1027,67 +1256,33 @@ fun AgentsTab(
                 }
             }
         }
-
-        if (avail.isEmpty()) {
-            Box(Modifier.fillMaxWidth().height(260.dp), contentAlignment = Alignment.Center) {
-                Text(
-                    "Activa al menos un rol\narriba para girar la ruleta.",
-                    textAlign = TextAlign.Center, color = Color.Gray
-                )
+        Spacer(Modifier.height(10.dp))
+        if (items.isEmpty()) {
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text("—", color = DIM, fontSize = 32.sp)
             }
         } else {
-            Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
-                Wheel(avail, { rot.value }, POINTER_COLORS[st.pointerIdx], Modifier.fillMaxWidth())
-            }
+            FitWheel(items, { rot.value }, POINTER_COLORS[st.pointerIdx], Modifier.weight(1f).fillMaxWidth())
         }
-        Spacer(Modifier.height(8.dp))
-        BigButton("GIRAR", enabled = !spinning && avail.isNotEmpty(), onClick = onSpin)
+        Spacer(Modifier.height(10.dp))
+        BigButton("GIRAR", enabled = !spinning && items.isNotEmpty(), onClick = onSpin)
     }
 }
 
 // ============================================================
-//  PESTAÑA RECOMENDACIONES (EQUIPO + MAPA + % DE VICTORIA)
+//  PESTAÑA EQUIPO: MEJORES POR ROL SEGÚN EL MAPA
 // ============================================================
-
-@Composable
-fun PickCard(p: Pick, onAdd: () -> Unit) {
-    val shape = RoundedCornerShape(16.dp)
-    Column(
-        Modifier.width(128.dp).clip(shape).background(SURFACE)
-            .border(1.dp, p.agent.role.color.copy(alpha = 0.5f), shape)
-            .clickable { onAdd() }
-            .padding(10.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        AgentImage(p.agent.icon, Modifier.size(60.dp), p.agent.name)
-        Spacer(Modifier.height(6.dp))
-        Text(p.agent.name, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            RoleIcon(p.agent.role, 14.dp)
-            Spacer(Modifier.width(4.dp))
-            Text(p.agent.role.es, fontSize = 11.sp, color = Color.Gray, maxLines = 1)
-        }
-        Spacer(Modifier.height(6.dp))
-        Text(
-            fmt(p.wr.wr), fontSize = 18.sp, fontWeight = FontWeight.Black,
-            color = if (p.wr.wr >= 52f) GREEN else if (p.wr.wr >= 50f) Color.White else RED
-        )
-        Text("${p.wr.n} partidas", fontSize = 10.sp, color = Color.Gray)
-    }
-}
 
 @Composable
 fun TeamTab(st: AppState) {
-    var pickSlot by remember { mutableStateOf<Int?>(null) }
     var reload by remember { mutableStateOf(0) }
     var loadingFor by remember { mutableStateOf<String?>(null) }
+    var mapMenu by remember { mutableStateOf(false) }
     val map = st.mapName
     val stats = STATS[map]
-    val team = st.team.mapNotNull { n -> AGENTS.firstOrNull { it.name == n } }
 
-    // Pide los porcentajes de victoria del mapa elegido (en vivo)
     LaunchedEffect(map, reload) {
-        if (STATS[map]?.live == true) return@LaunchedEffect
+        if (STATS[map]?.live == true && reload == 0) return@LaunchedEffect
         loadingFor = map
         try {
             val live = try {
@@ -1105,368 +1300,95 @@ fun TeamTab(st: AppState) {
         }
     }
 
-    fun addToTeam(a: Agent) {
-        val free = st.team.indexOfFirst { it == null }
-        if (free >= 0) st.team[free] = a.name
-    }
-
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 16.dp)) {
-        SectionTitle("Mapa")
-        var mapMenu by remember { mutableStateOf(false) }
+    Column(
+        Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
         val current = mapList.value.firstOrNull { it.name == st.mapName }
-        Box(Modifier.padding(horizontal = 16.dp)) {
-            Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(SURFACE)
-                    .border(1.5.dp, if (mapMenu) RED else OUTLINE, RoundedCornerShape(14.dp))
-                    .clickable { mapMenu = true }.padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                MapThumb(current?.icon, st.mapName)
-                Spacer(Modifier.width(12.dp))
-                Text(st.mapName, fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.weight(1f))
-                if (st.mapName in POOL) {
-                    Text("En rotación", fontSize = 11.sp, color = GREEN)
-                }
-                Icon(Icons.Filled.ArrowDropDown, contentDescription = "Cambiar mapa", tint = Color.Gray)
-            }
-            DropdownMenu(
-                expanded = mapMenu,
-                onDismissRequest = { mapMenu = false },
-                modifier = Modifier.width(320.dp).heightIn(max = 380.dp)
-            ) {
-                mapList.value.forEach { m ->
-                    DropdownMenuItem(
-                        text = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                MapThumb(m.icon, m.name)
-                                Spacer(Modifier.width(12.dp))
-                                Text(
-                                    m.name, modifier = Modifier.weight(1f),
-                                    fontWeight = if (m.name == st.mapName) FontWeight.Bold else FontWeight.Normal
-                                )
-                                if (m.name in POOL) Text("En rotación", fontSize = 11.sp, color = GREEN)
-                            }
-                        },
-                        onClick = { st.mapName = m.name; mapMenu = false }
-                    )
-                }
-            }
-        }
-
-        SectionTitle("Tu equipo") {
-            IconButton(
-                onClick = { for (i in 0 until 5) st.team[i] = null },
-                enabled = team.isNotEmpty(),
-                modifier = Modifier.size(36.dp)
-            ) {
-                Icon(
-                    Icons.Filled.RestartAlt, contentDescription = "Reiniciar equipo",
-                    tint = if (team.isNotEmpty()) Color.White else OUTLINE
-                )
-            }
-        }
-
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            repeat(5) { i ->
-                val a = AGENTS.firstOrNull { it.name == st.team[i] }
-                Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Box(
-                        Modifier.fillMaxWidth().aspectRatio(1f).clip(CircleShape)
-                            .background(SURFACE)
-                            .border(2.dp, a?.role?.color ?: OUTLINE, CircleShape)
-                            .clickable { pickSlot = i },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (a != null) AgentImage(a.icon, Modifier.fillMaxSize(), a.name)
-                        else Icon(Icons.Filled.Add, contentDescription = "Añadir", tint = Color.Gray)
-                    }
-                    Text(
-                        a?.name ?: " ", fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        color = Color.Gray, modifier = Modifier.padding(top = 4.dp)
-                    )
-                }
-            }
-        }
-
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Role.values().forEach { role ->
-                val n = team.count { it.role == role }
-                val shape = RoundedCornerShape(14.dp)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f)) {
                 Row(
-                    Modifier.weight(1f).height(44.dp).clip(shape)
-                        .background(if (n > 0) role.color.copy(alpha = 0.18f) else SURFACE)
-                        .border(1.5.dp, if (n > 0) role.color else OUTLINE, shape),
-                    horizontalArrangement = Arrangement.Center,
+                    Modifier.fillMaxWidth().card(14.dp, if (mapMenu) RED else OUTLINE)
+                        .clickable { mapMenu = true }.padding(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(Modifier.alpha(if (n > 0) 1f else 0.4f)) { RoleIcon(role, 22.dp) }
-                    Spacer(Modifier.width(6.dp))
-                    Text("$n", fontWeight = FontWeight.Bold, color = if (n > 0) Color.White else Color.Gray)
+                    MapThumb(current?.icon, st.mapName)
+                    Spacer(Modifier.width(12.dp))
+                    Text(st.mapName.uppercase(), fontWeight = FontWeight.Bold, letterSpacing = 2.sp, modifier = Modifier.weight(1f))
+                    if (st.mapName in POOL) Text("●", color = GREEN, fontSize = 10.sp)
+                    Icon(Icons.Filled.ArrowDropDown, contentDescription = "Cambiar mapa", tint = DIM)
                 }
-            }
-        }
-
-        // Estado de los datos
-        when {
-            stats == null && loadingFor == map -> {
-                Row(
-                    Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                DropdownMenu(
+                    expanded = mapMenu,
+                    onDismissRequest = { mapMenu = false },
+                    modifier = Modifier.width(300.dp).heightIn(max = 380.dp)
                 ) {
-                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = RED)
-                    Spacer(Modifier.width(10.dp))
-                    Text("Cargando porcentajes de victoria de $map…", color = Color.Gray, fontSize = 13.sp)
-                }
-            }
-            stats == null -> {
-                Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
-                    Text(
-                        "No se pudieron cargar los porcentajes de victoria de $map. Revisa tu conexión.",
-                        color = Color.Gray, fontSize = 13.sp
-                    )
-                    TextButton(onClick = { reload++ }) { Text("Reintentar") }
-                }
-            }
-            else -> {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 20.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        if (stats.live) "En vivo · MetaBot.gg · todos los rangos"
-                        else "Sin conexión con MetaBot: datos de respaldo del $SNAPSHOT_DATE",
-                        fontSize = 11.sp, color = if (stats.live) GREEN else Color.Gray,
-                        modifier = Modifier.weight(1f)
-                    )
-                    TextButton(onClick = { reload++ }) { Text("Actualizar", fontSize = 12.sp) }
-                }
-
-                val picks = recommend(team, stats.data)
-                if (team.isEmpty()) {
-                    SectionTitle("Mejores agentes en $map")
-                    LazyRow(
-                        contentPadding = PaddingValues(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        items(picks.sortedByDescending { it.adj }.take(8)) { p -> PickCard(p) { addToTeam(p.agent) } }
-                    }
-                    Text(
-                        "Toca un círculo y elige tus agentes: te diré cuál conviene más en $map según los porcentajes de victoria.",
-                        color = Color.Gray, fontSize = 13.sp,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
-                    )
-                } else if (team.size < 5) {
-                    val best = picks.firstOrNull()
-                    if (best != null) {
-                        Column(
-                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
-                                .clip(RoundedCornerShape(20.dp)).background(SURFACE)
-                                .border(1.5.dp, RED, RoundedCornerShape(20.dp))
-                                .padding(16.dp)
-                        ) {
-                            Text("MEJOR OPCIÓN EN ${map.uppercase()}", fontSize = 11.sp, color = RED, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
-                            Spacer(Modifier.height(10.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                AgentImage(best.agent.icon, Modifier.size(84.dp), best.agent.name)
-                                Spacer(Modifier.width(14.dp))
-                                Column {
-                                    Text(best.agent.name.uppercase(), fontSize = 26.sp, fontWeight = FontWeight.Black, color = best.agent.role.color)
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        RoleIcon(best.agent.role, 18.dp)
-                                        Spacer(Modifier.width(6.dp))
-                                        Text(best.agent.role.es, color = Color.Gray, fontSize = 13.sp)
-                                    }
+                    mapList.value.forEach { m ->
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    MapThumb(m.icon, m.name)
+                                    Spacer(Modifier.width(12.dp))
                                     Text(
-                                        fmt(best.wr.wr) + " victorias", fontSize = 18.sp, fontWeight = FontWeight.Bold,
-                                        color = if (best.wr.wr >= 52f) GREEN else if (best.wr.wr >= 50f) Color.White else RED
+                                        m.name, modifier = Modifier.weight(1f),
+                                        fontWeight = if (m.name == st.mapName) FontWeight.Bold else FontWeight.Normal
                                     )
+                                    if (m.name in POOL) Text("●", color = GREEN, fontSize = 10.sp)
                                 }
-                            }
-                            Spacer(Modifier.height(10.dp))
-                            Text(reasonFor(best, team, map), fontSize = 13.sp, color = Color.Gray)
-                            if (best.agent.abilities.isNotEmpty()) {
-                                Spacer(Modifier.height(10.dp))
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    best.agent.abilities.take(4).forEach { b ->
-                                        AsyncImage(model = b.icon, contentDescription = b.name, modifier = Modifier.size(28.dp))
-                                    }
-                                }
-                            }
-                            Spacer(Modifier.height(12.dp))
-                            Button(
-                                onClick = { addToTeam(best.agent) },
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) { Text("Añadir al equipo") }
-                        }
-                    }
-                    SectionTitle("Otras buenas opciones")
-                    LazyRow(
-                        contentPadding = PaddingValues(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        items(picks.drop(1).take(7)) { p -> PickCard(p) { addToTeam(p.agent) } }
-                    }
-                } else {
-                    // Equipo completo: revisión y cambios sugeridos
-                    val members = team.mapNotNull { a -> stats.data[a.name]?.let { a to it } }
-                    SectionTitle("Tu equipo en $map")
-                    Column(
-                        Modifier.fillMaxWidth().padding(horizontal = 16.dp)
-                            .clip(RoundedCornerShape(16.dp)).background(SURFACE).padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        team.forEach { a ->
-                            val w = stats.data[a.name]
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                AgentImage(a.icon, Modifier.size(40.dp), a.name)
-                                Spacer(Modifier.width(10.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(a.name, fontWeight = FontWeight.Bold)
-                                    Text(a.role.es, fontSize = 11.sp, color = Color.Gray)
-                                }
-                                if (w != null) {
-                                    Text(
-                                        fmt(w.wr), fontWeight = FontWeight.Black,
-                                        color = if (w.wr >= 52f) GREEN else if (w.wr >= 50f) Color.White else RED
-                                    )
-                                } else {
-                                    Text("sin datos", fontSize = 11.sp, color = Color.Gray)
-                                }
-                            }
-                        }
-                        if (members.isNotEmpty()) {
-                            HorizontalDivider()
-                            Text(
-                                "Promedio del equipo: " + fmt(members.map { it.second.wr }.average().toFloat()),
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-
-                    SectionTitle("Cambios que te convienen")
-                    val swaps = members.mapNotNull { (a, w) ->
-                        val better = picks.filter { it.agent.role == a.role && it.adj >= adjWr(w) + 1.5f }
-                            .maxByOrNull { it.adj }
-                        if (better != null) Triple(a, w, better) else null
-                    }
-                    if (swaps.isEmpty()) {
-                        Text(
-                            "No hay cambios claros: tu equipo ya usa buenas opciones para $map.",
-                            color = Color.Gray, fontSize = 13.sp,
-                            modifier = Modifier.padding(horizontal = 20.dp)
+                            },
+                            onClick = { st.mapName = m.name; mapMenu = false }
                         )
-                    } else {
-                        Column(
-                            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            swaps.forEach { (a, w, b) ->
-                                Row(
-                                    Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
-                                        .background(SURFACE).padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    AgentImage(a.icon, Modifier.size(36.dp), a.name)
-                                    Text(
-                                        "  →  ", color = Color.Gray, fontWeight = FontWeight.Bold
-                                    )
-                                    AgentImage(b.agent.icon, Modifier.size(36.dp), b.agent.name)
-                                    Spacer(Modifier.width(10.dp))
-                                    Text(
-                                        "Cambia ${a.name} (${fmt(w.wr)}) por ${b.agent.name} (${fmt(b.wr.wr)})",
-                                        fontSize = 13.sp, modifier = Modifier.weight(1f)
-                                    )
-                                }
-                            }
-                        }
                     }
                 }
+            }
+            Spacer(Modifier.width(6.dp))
+            if (stats != null) {
+                Box(Modifier.size(8.dp).background(if (stats.live) GREEN else Color(0xFFE0A030), CircleShape))
+            }
+            IconButton(onClick = { reload++ }, modifier = Modifier.size(40.dp)) {
+                Icon(Icons.Filled.Refresh, contentDescription = "Actualizar", tint = DIM)
+            }
+        }
 
-                val advice = teamAdvice(team)
-                if (advice.isNotEmpty()) {
-                    Spacer(Modifier.height(12.dp))
-                    SectionTitle("Composición")
-                    Column(
-                        Modifier.fillMaxWidth().padding(horizontal = 16.dp)
-                            .clip(RoundedCornerShape(16.dp)).background(SURFACE).padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        advice.forEach { ad ->
-                            Row(verticalAlignment = Alignment.Top) {
-                                Box(
-                                    Modifier.padding(top = 6.dp).size(8.dp)
-                                        .background(if (ad.ok) GREEN else RED, CircleShape)
+        if (stats == null) {
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                if (loadingFor == map) {
+                    CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp, color = RED)
+                } else {
+                    Text("Sin datos de $map", color = DIM)
+                }
+            }
+        } else {
+            PRIORITY.forEachIndexed { i, role ->
+                val picks = topByRole(role, stats.data)
+                Row(
+                    Modifier.weight(1f).fillMaxWidth().card(18.dp).padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.width(70.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Label("0${i + 1}")
+                        Spacer(Modifier.height(2.dp))
+                        RoleIcon(role, 28.dp)
+                        Spacer(Modifier.height(2.dp))
+                        Text(role.es, fontSize = 10.sp, color = role.color, maxLines = 1)
+                    }
+                    Row(Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceEvenly) {
+                        picks.forEachIndexed { j, (a, w) ->
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                AgentImage(
+                                    a.icon,
+                                    Modifier.size(if (j == 0) 54.dp else 44.dp)
+                                        .border(if (j == 0) 2.dp else 0.dp, RED, CircleShape),
+                                    a.name
                                 )
-                                Spacer(Modifier.width(10.dp))
-                                Text(ad.text, fontSize = 14.sp)
+                                Text(a.name, fontSize = 11.sp, maxLines = 1, color = TEXT)
+                                Text(fmt(w.wr), fontSize = 13.sp, fontWeight = FontWeight.Bold, color = wrColor(w.wr))
                             }
                         }
                     }
                 }
             }
         }
-    }
-
-    pickSlot?.let { slot ->
-        AlertDialog(
-            onDismissRequest = { pickSlot = null },
-            title = { Text("Elige un agente") },
-            confirmButton = { TextButton(onClick = { pickSlot = null }) { Text("Cerrar") } },
-            dismissButton = {
-                if (st.team[slot] != null) {
-                    TextButton(onClick = { st.team[slot] = null; pickSlot = null }) { Text("Quitar") }
-                }
-            },
-            text = {
-                Column(Modifier.verticalScroll(rememberScrollState())) {
-                    Role.values().forEach { role ->
-                        Row(Modifier.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                            RoleIcon(role, 22.dp)
-                            Spacer(Modifier.width(8.dp))
-                            Text(role.es, color = role.color, fontWeight = FontWeight.Bold)
-                        }
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            AGENTS.filter { it.role == role }.forEach { a ->
-                                val taken = a.name in st.team && st.team[slot] != a.name
-                                val w = stats?.data?.get(a.name)
-                                Column(
-                                    Modifier.width(60.dp).alpha(if (taken) 0.3f else 1f)
-                                        .clickable(enabled = !taken) {
-                                            st.team[slot] = a.name
-                                            pickSlot = null
-                                        },
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    AgentImage(
-                                        a.icon,
-                                        Modifier.size(52.dp)
-                                            .border(
-                                                if (st.team[slot] == a.name) 2.dp else 0.dp,
-                                                RED, CircleShape
-                                            ),
-                                        a.name
-                                    )
-                                    Text(a.name, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    if (w != null) {
-                                        Text(
-                                            fmt(w.wr), fontSize = 10.sp, fontWeight = FontWeight.Bold,
-                                            color = if (w.wr >= 52f) GREEN else if (w.wr >= 50f) Color.White else RED
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        )
     }
 }
 
@@ -1475,22 +1397,20 @@ fun TeamTab(st: AppState) {
 // ============================================================
 
 @Composable
-fun WeaponsTab(st: AppState, shown: Weapon?, spinning: Boolean, onSpin: () -> Unit) {
-    val all = st.weapons()
+fun WeaponsTab(st: AppState, rot: Animatable<Float, AnimationVector1D>, spinning: Boolean, onSpin: () -> Unit) {
     val pool = st.weaponPool()
+    val items = pool.map { WheelItem(it.name, catColor(it.cat)) }
     var text by remember { mutableStateOf(st.credits.toString()) }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 16.dp)) {
-        if (all.isEmpty()) {
-            Box(Modifier.fillMaxWidth().height(300.dp), contentAlignment = Alignment.Center) {
-                Text(
-                    "Conéctate a internet una vez\npara descargar las armas.",
-                    textAlign = TextAlign.Center, color = Color.Gray
-                )
+    Column(
+        Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        if (weaponList.value.isEmpty()) {
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text("Sin conexión", color = DIM)
             }
             return@Column
         }
-
-        SectionTitle("Tus créditos")
         OutlinedTextField(
             value = text,
             onValueChange = { v ->
@@ -1499,82 +1419,223 @@ fun WeaponsTab(st: AppState, shown: Weapon?, spinning: Boolean, onSpin: () -> Un
                 st.credits = num.coerceAtMost(9000)
                 text = if (num > 9000) "9000" else d
             },
+            enabled = !spinning,
             singleLine = true,
+            label = { Text("CRÉDITOS") },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            suffix = { Text("créditos", color = Color.Gray) },
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+            shape = RoundedCornerShape(14.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = RED, unfocusedBorderColor = OUTLINE,
+                focusedLabelColor = RED, unfocusedLabelColor = DIM, cursorColor = RED
+            ),
+            modifier = Modifier.fillMaxWidth(0.6f)
         )
-        FlowRow(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            listOf(800, 1600, 2900, 3900, 9000).forEach { c ->
-                FilterChip(
-                    selected = st.credits == c,
-                    onClick = { st.credits = c; text = c.toString() },
-                    label = { Text("$c") }
-                )
+        Spacer(Modifier.height(10.dp))
+        FitWheel(items, { rot.value }, POINTER_COLORS[st.pointerIdx], Modifier.weight(1f).fillMaxWidth())
+        Spacer(Modifier.height(10.dp))
+        BigButton("SORTEAR", enabled = !spinning && items.isNotEmpty(), onClick = onSpin)
+    }
+}
+
+// ============================================================
+//  PESTAÑA PERFIL
+// ============================================================
+
+@Composable
+fun ProfileForm(st: AppState) {
+    val colors = OutlinedTextFieldDefaults.colors(
+        focusedBorderColor = RED, unfocusedBorderColor = OUTLINE,
+        focusedLabelColor = RED, unfocusedLabelColor = DIM, cursorColor = RED
+    )
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        OutlinedTextField(
+            value = st.riotId, onValueChange = { st.riotId = it },
+            label = { Text("RIOT ID") }, singleLine = true,
+            shape = RoundedCornerShape(14.dp), colors = colors,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = st.apiKey, onValueChange = { st.apiKey = it.trim() },
+            label = { Text("API KEY · HenrikDev") }, singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            shape = RoundedCornerShape(14.dp), colors = colors,
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+@Composable
+fun StatBox(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier.card(16.dp).padding(vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(value, fontSize = 20.sp, fontWeight = FontWeight.Black)
+        Label(label)
+    }
+}
+
+@Composable
+fun ProfileTab(st: AppState) {
+    var reload by remember { mutableStateOf(0) }
+    var loading by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val profile = profileState.value
+
+    LaunchedEffect(st.riotId, st.apiKey, reload) {
+        if (st.apiKey.isBlank()) return@LaunchedEffect
+        val keyNow = st.riotId + "|" + st.apiKey
+        if (reload == 0 && profileLoadedFor == keyNow && profileState.value != null) return@LaunchedEffect
+        delay(600)
+        loading = true
+        error = null
+        try {
+            profileState.value = fetchProfile(st.riotId, st.apiKey)
+            profileLoadedFor = keyNow
+        } catch (e: Exception) {
+            error = e.message ?: "Error"
+        }
+        loading = false
+    }
+
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        if (st.apiKey.isBlank()) {
+            Label("Conectar perfil")
+            ProfileForm(st)
+            return@Column
+        }
+
+        error?.let {
+            Row(
+                Modifier.fillMaxWidth().card(14.dp, RED).padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(it, color = RED, modifier = Modifier.weight(1f), fontSize = 13.sp)
+                IconButton(onClick = { reload++ }) { Icon(Icons.Filled.Refresh, contentDescription = "Reintentar", tint = RED) }
             }
         }
 
-        Column(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
-                .clip(RoundedCornerShape(20.dp)).background(SURFACE)
-                .border(1.dp, if (shown != null && !spinning) RED else OUTLINE, RoundedCornerShape(20.dp))
-                .padding(16.dp).heightIn(min = 190.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            if (shown == null) {
-                Text("?", fontSize = 64.sp, fontWeight = FontWeight.Black, color = OUTLINE)
-                Text("Pulsa sortear para elegir un arma", color = Color.Gray, fontSize = 13.sp)
-            } else {
-                AsyncImage(
-                    model = shown.icon, contentDescription = shown.name,
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxWidth().height(110.dp)
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(shown.name.uppercase(), fontSize = 28.sp, fontWeight = FontWeight.Black)
-                val price = when (shown.cost) {
-                    null -> ""
-                    0 -> " · Gratis"
-                    else -> " · ${shown.cost} créditos"
+        if (profile == null) {
+            if (loading) {
+                Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp, color = RED)
                 }
-                Text(catEs(shown.cat) + price, color = Color.Gray, fontSize = 13.sp)
+            }
+            return@Column
+        }
+
+        // 01 Jugador
+        Box(Modifier.fillMaxWidth().card()) {
+            if (profile.card != null) {
+                AsyncImage(
+                    model = "https://media.valorant-api.com/playercards/${profile.card}/wideart.png",
+                    contentDescription = null, contentScale = ContentScale.Crop,
+                    modifier = Modifier.matchParentSize().alpha(0.3f)
+                )
+            }
+            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (profile.card != null) {
+                    AsyncImage(
+                        model = "https://media.valorant-api.com/playercards/${profile.card}/displayicon.png",
+                        contentDescription = null,
+                        modifier = Modifier.size(64.dp).clip(RoundedCornerShape(14.dp)).background(OUTLINE)
+                    )
+                    Spacer(Modifier.width(14.dp))
+                }
+                Column(Modifier.weight(1f)) {
+                    Label("01 Jugador")
+                    Text(profile.name.uppercase(), fontSize = 20.sp, fontWeight = FontWeight.Black, maxLines = 1)
+                    Row {
+                        Text("#${profile.tag}", color = RED, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.width(10.dp))
+                        Text("NIV ${profile.level}", color = DIM)
+                        Spacer(Modifier.width(10.dp))
+                        Text(profile.region.uppercase(), color = DIM)
+                    }
+                }
+                IconButton(onClick = { reload++ }) {
+                    if (loading) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = RED)
+                    else Icon(Icons.Filled.Refresh, contentDescription = "Actualizar", tint = TEXT)
+                }
             }
         }
 
-        BigButton("SORTEAR ARMA", enabled = !spinning && pool.isNotEmpty(), onClick = onSpin)
+        // 02 Rango
+        Row(Modifier.fillMaxWidth().card().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (profile.tierIcon != null) {
+                AsyncImage(model = profile.tierIcon, contentDescription = null, modifier = Modifier.size(76.dp))
+                Spacer(Modifier.width(14.dp))
+            }
+            Column(Modifier.weight(1f)) {
+                Label("02 Rango")
+                Text(rankEs(profile.tierName ?: "Sin rango").uppercase(), fontSize = 22.sp, fontWeight = FontWeight.Black)
+                if (profile.rr != null) {
+                    Row {
+                        Text("${profile.rr} RR", color = RED, fontWeight = FontWeight.Bold)
+                        val ch = profile.change
+                        if (ch != null) {
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                (if (ch > 0) "+" else "") + ch,
+                                color = if (ch >= 0) GREEN else RED, fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+                if (profile.peakName != null) {
+                    Spacer(Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Label("Pico ")
+                        if (profile.peakIcon != null) {
+                            AsyncImage(model = profile.peakIcon, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                        }
+                        Text(rankEs(profile.peakName).uppercase(), fontSize = 12.sp, color = TEXT)
+                    }
+                }
+            }
+        }
 
-        Text(
-            "${pool.size} de ${all.size} armas entran al sorteo con ${st.credits} créditos",
-            fontSize = 12.sp, color = Color.Gray, textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
-        )
+        // 03 Estadísticas
+        Label("03 Últimas ${profile.matches.size} partidas")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            StatBox("K/D", profile.kd?.let { "%.2f".format(Locale.US, it) } ?: "—", Modifier.weight(1f))
+            StatBox("Victorias", profile.winPct?.let { "${it.roundToInt()}%" } ?: "—", Modifier.weight(1f))
+            StatBox("Headshot", profile.hs?.let { "${it.roundToInt()}%" } ?: "—", Modifier.weight(1f))
+            StatBox("ADR", profile.adr?.toString() ?: "—", Modifier.weight(1f))
+        }
 
-        SectionTitle("Armas en el sorteo")
-        FlowRow(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-            maxItemsInEachRow = 4,
-            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            all.forEach { w ->
-                val on = shown?.name == w.name
-                val buyable = st.canBuy(w)
-                val shape = RoundedCornerShape(10.dp)
-                Box(
-                    Modifier.width(78.dp).height(52.dp).alpha(if (buyable) 1f else 0.2f).clip(shape)
-                        .background(if (on) RED.copy(alpha = 0.2f) else SURFACE)
-                        .border(if (on) 2.dp else 1.dp, if (on) RED else OUTLINE, shape)
-                        .padding(4.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    AsyncImage(
-                        model = w.icon, contentDescription = w.name,
-                        contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()
-                    )
+        // 04 Partidas
+        if (profile.matches.isNotEmpty()) {
+            Label("04 Partidas")
+            Column(Modifier.fillMaxWidth().card().padding(horizontal = 12.dp, vertical = 6.dp)) {
+                profile.matches.forEachIndexed { i, m ->
+                    if (i > 0) HorizontalDivider(color = OUTLINE)
+                    Row(Modifier.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        AgentImage(
+                            AGENTS.firstOrNull { it.name.equals(m.agent, true) }?.icon,
+                            Modifier.size(38.dp), m.agent
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(m.map.uppercase(), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text(m.mode, fontSize = 11.sp, color = DIM)
+                        }
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                m.score, fontWeight = FontWeight.Black,
+                                color = when (m.won) {
+                                    true -> GREEN
+                                    false -> RED
+                                    null -> DIM
+                                }
+                            )
+                            Text("${m.k}/${m.d}/${m.a}", fontSize = 11.sp, color = DIM)
+                        }
+                    }
                 }
             }
         }
@@ -1589,39 +1650,44 @@ fun WeaponsTab(st: AppState, shown: Weapon?, spinning: Boolean, onSpin: () -> Un
 fun SettingsDialog(st: AppState, onClose: () -> Unit) {
     AlertDialog(
         onDismissRequest = onClose,
-        confirmButton = { TextButton(onClick = onClose) { Text("Cerrar") } },
-        dismissButton = { TextButton(onClick = { st.resetSettings() }) { Text("Restablecer") } },
-        title = { Text("Ajustes") },
+        containerColor = SURFACE,
+        confirmButton = { TextButton(onClick = onClose) { Text("Cerrar", color = RED) } },
+        dismissButton = { TextButton(onClick = { st.resetSettings() }) { Text("Restablecer", color = DIM) } },
+        title = { Text("AJUSTES", letterSpacing = 3.sp, fontSize = 16.sp) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                Text("Color del puntero")
+                Label("Color del puntero")
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.padding(vertical = 6.dp)
+                    modifier = Modifier.padding(vertical = 8.dp)
                 ) {
                     POINTER_COLORS.forEachIndexed { i, c ->
                         Box(
                             Modifier.size(34.dp).background(c, CircleShape)
-                                .border(if (i == st.pointerIdx) 3.dp else 0.dp, Color.Gray, CircleShape)
+                                .border(if (i == st.pointerIdx) 3.dp else 0.dp, DIM, CircleShape)
                                 .clickable { st.pointerIdx = i }
                         )
                     }
                 }
-                Text("Duración de la ruleta: ${st.singleSec}s")
+                Label("Ruleta de agentes · ${st.singleSec}s")
                 Slider(
                     value = st.singleSec.toFloat(), onValueChange = { st.singleSec = it.roundToInt() },
                     valueRange = 2f..20f, steps = 17
                 )
-                Text("Intensidad del giro: ${st.intensity}")
+                Label("Ruleta de armas · ${st.weaponSec}s")
+                Slider(
+                    value = st.weaponSec.toFloat(), onValueChange = { st.weaponSec = it.roundToInt() },
+                    valueRange = 2f..20f, steps = 17
+                )
+                Label("Intensidad · ${st.intensity}")
                 Slider(
                     value = st.intensity.toFloat(), onValueChange = { st.intensity = it.roundToInt() },
                     valueRange = 1f..10f, steps = 8
                 )
-                Text("Duración del sorteo de armas: ${st.weaponSec}s")
-                Slider(
-                    value = st.weaponSec.toFloat(), onValueChange = { st.weaponSec = it.roundToInt() },
-                    valueRange = 2f..10f, steps = 7
-                )
+                HorizontalDivider(Modifier.padding(vertical = 10.dp), color = OUTLINE)
+                Label("Perfil")
+                Spacer(Modifier.height(8.dp))
+                ProfileForm(st)
             }
         }
     )
