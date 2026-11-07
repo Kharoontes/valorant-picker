@@ -19,7 +19,8 @@ La navegación se hace con una barra inferior de tres iconos:
 - Resultado con la cara del agente, su nombre y su rol en español.
 
 ### Recomendaciones
-- Eliges el mapa del pool competitivo actual y hasta 5 agentes de tu equipo.
+- Eliges el mapa en una lista desplegable (todos los mapas de partida, marcando los que están en rotación) y hasta 5 agentes de tu equipo.
+- Un botón con icono reinicia el equipo de un toque.
 - La app consulta en vivo el **porcentaje de victorias de cada agente en ese mapa** y calcula la **mejor opción** para completar tu equipo.
 - El cálculo tiene en cuenta el porcentaje de victorias, el número de partidas (para no fiarse de muestras pequeñas) y el equilibrio de roles.
 - Con el equipo completo te muestra el porcentaje de cada integrante en ese mapa, el promedio del equipo y los cambios que te convienen.
@@ -29,9 +30,11 @@ La navegación se hace con una barra inferior de tres iconos:
 - Sorteo con animación: las armas del sorteo se iluminan una a una hasta detenerse en la elegida.
 - Resultado con imagen, nombre, categoría y costo en créditos.
 - No incluye el cuchillo.
+- Pones tus créditos (o eliges 800, 1600, 2900, 3900 o 9000) y el sorteo solo usa armas que puedas comprar. Las demás se ven atenuadas.
 
 ### General
-- Pantalla de carga al iniciar: actualiza los datos y precarga todas las imágenes, así nada tarda en aparecer después.
+- Pantalla de carga solo la primera vez: descarga todas las imágenes y quedan guardadas en el dispositivo. Después la app abre directo y solo baja lo que sea nuevo.
+- Barra superior centrada y barra inferior con una animación sutil en la pestaña activa.
 - Ajustes de duración, intensidad y color del puntero.
 - Todo lo que eliges se guarda automáticamente en el dispositivo.
 
@@ -44,7 +47,7 @@ La navegación se hace con una barra inferior de tres iconos:
 
 Los porcentajes de victoria no se guardan en el dispositivo: se piden cada vez. Solo si MetaBot no responde, la app usa una copia de respaldo del 6 de noviembre de 2026 para los mapas Bind, Haven, Lotus y Sunset, y lo avisa en pantalla.
 
-Si Riot añade un agente o un arma, aparece sin recompilar. Para un agente nuevo se muestra además un aviso con su nombre. La única excepción sería un **rol nuevo**: habría que añadirlo a `Role` en `MainActivity.kt`. Del mismo modo, cuando cambie el pool de mapas competitivos hay que actualizar la lista `POOL`.
+Si Riot añade un agente o un arma, aparece sin recompilar. Para un agente nuevo se muestra además un aviso con su nombre. La única excepción sería un **rol nuevo**: habría que añadirlo a `Role` en `MainActivity.kt`. Del mismo modo, cuando cambie el pool de mapas competitivos conviene actualizar la lista `POOL`, que solo sirve para marcar los mapas "En rotación".
 
 ## Tecnologías
 
@@ -72,7 +75,6 @@ Requiere Android 7.0 (API 24) o superior.
         └── java/com/example/valpicker/
             └── MainActivity.kt    # Toda la lógica y la interfaz
 ```
-
 
 ## Hecho con Inteligencia Artificial e Inteligencia Artesanal
 
