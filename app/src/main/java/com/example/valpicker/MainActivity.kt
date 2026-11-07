@@ -9,7 +9,11 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -22,12 +26,15 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.GpsFixed
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -35,6 +42,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -47,14 +55,20 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.Coil
+import coil.ImageLoader
 import coil.compose.AsyncImage
+import coil.disk.DiskCache
+import coil.memory.MemoryCache
 import coil.imageLoader
 import coil.request.ImageRequest
+import coil.request.SuccessResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -243,13 +257,14 @@ fun parseWeapons(text: String): List<Weapon> {
 
 fun parseMaps(text: String): List<MapInfo> {
     val arr = JSONObject(text).getJSONArray("data")
-    val found = mutableMapOf<String, String?>()
+    val out = mutableListOf<MapInfo>()
     for (i in 0 until arr.length()) {
         val o = arr.getJSONObject(i)
         val name = o.str("displayName") ?: continue
-        found[name] = o.str("listViewIcon") ?: o.str("splash")
+        if (o.str("tacticalDescription") == null) continue   // solo mapas de partida (con sitios)
+        out.add(MapInfo(name, o.str("listViewIcon") ?: o.str("splash")))
     }
-    return POOL.map { MapInfo(it, found[it]) }
+    return out.distinctBy { it.name }.sortedBy { it.name }
 }
 
 // ---- Porcentajes de victoria por mapa (lectura en vivo de MetaBot.gg) ----
@@ -409,6 +424,7 @@ class AppState(prefs: SharedPreferences) {
     var weaponSec by mutableStateOf(4)
     var intensity by mutableStateOf(5)
     var pointerIdx by mutableStateOf(0)
+    var credits by mutableStateOf(9000)
 
     init {
         prefs.getString("state3", null)?.let { decode(it) }
@@ -416,6 +432,8 @@ class AppState(prefs: SharedPreferences) {
 
     fun available(): List<Agent> = AGENTS.filter { it.role !in roleOff }
     fun weapons(): List<Weapon> = weaponList.value
+    fun canBuy(w: Weapon): Boolean = (w.cost ?: Int.MAX_VALUE) <= credits
+    fun weaponPool(): List<Weapon> = weaponList.value.filter { canBuy(it) }
 
     fun resetSettings() {
         singleSec = 8; weaponSec = 4; intensity = 5; pointerIdx = 0
@@ -425,7 +443,8 @@ class AppState(prefs: SharedPreferences) {
         roleOff.joinToString(",") { it.name },
         singleSec, weaponSec, intensity, pointerIdx,
         team.joinToString(",") { it ?: "-" },
-        mapName
+        mapName,
+        credits
     ).joinToString("\n")
 
     private fun decode(s: String) {
@@ -437,7 +456,8 @@ class AppState(prefs: SharedPreferences) {
             singleSec = p[1].toInt(); weaponSec = p[2].toInt(); intensity = p[3].toInt()
             pointerIdx = p[4].toInt().coerceIn(0, POINTER_COLORS.size - 1)
             p[5].split(",").forEachIndexed { i, n -> if (i < 5) team[i] = if (n == "-") null else n }
-            if (p[6] in POOL) mapName = p[6]
+            if (p[6].isNotBlank()) mapName = p[6]
+            if (p.size >= 8) credits = p[7].toInt().coerceIn(0, 9000)
         } catch (e: Exception) {
         }
     }
@@ -524,6 +544,18 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val prefs = getSharedPreferences("wheel", MODE_PRIVATE)
+        Coil.setImageLoader(
+            ImageLoader.Builder(this)
+                .respectCacheHeaders(false)
+                .memoryCache { MemoryCache.Builder(this@MainActivity).maxSizePercent(0.3).build() }
+                .diskCache {
+                    DiskCache.Builder()
+                        .directory(filesDir.resolve("img_cache"))
+                        .maxSizeBytes(150L * 1024 * 1024)
+                        .build()
+                }
+                .build()
+        )
         loadCaches(prefs)
         val st = AppState(prefs)
         setContent {
@@ -577,12 +609,31 @@ fun RoleIcon(role: Role, size: Dp) {
 }
 
 @Composable
-fun SectionTitle(text: String) {
-    Text(
-        text.uppercase(), fontSize = 12.sp, color = Color.Gray, letterSpacing = 2.sp,
-        fontWeight = FontWeight.Bold,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-    )
+fun SectionTitle(text: String, trailing: (@Composable () -> Unit)? = null) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text.uppercase(), fontSize = 12.sp, color = Color.Gray, letterSpacing = 2.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).weight(1f)
+        )
+        if (trailing != null) {
+            trailing()
+            Spacer(Modifier.width(8.dp))
+        }
+    }
+}
+
+@Composable
+fun MapThumb(url: String?, name: String) {
+    val shape = RoundedCornerShape(8.dp)
+    if (url != null) {
+        AsyncImage(
+            model = url, contentDescription = name, contentScale = ContentScale.Crop,
+            modifier = Modifier.size(72.dp, 40.dp).clip(shape)
+        )
+    } else {
+        Box(Modifier.size(72.dp, 40.dp).clip(shape).background(OUTLINE))
+    }
 }
 
 @Composable
@@ -696,7 +747,12 @@ fun App(st: AppState, prefs: SharedPreferences) {
     val rot = remember { Animatable(0f) }
 
     // Pantalla de carga
-    var ready by remember { mutableStateOf(false) }
+    var ready by remember {
+        mutableStateOf(
+            prefs.getString("agents_json", null) != null &&
+                (prefs.getStringSet("preloaded", null)?.isNotEmpty() == true)
+        )
+    }
     var status by remember { mutableStateOf("Conectando con la API…") }
     var done by remember { mutableStateOf(0) }
     var total by remember { mutableStateOf(0) }
@@ -751,8 +807,10 @@ fun App(st: AppState, prefs: SharedPreferences) {
             val m = async {
                 try {
                     val l = parseMaps(httpGet("https://valorant-api.com/v1/maps"))
-                    mapList.value = l
-                    prefs.edit().putString("maps_json", mapsToJson(l)).apply()
+                    if (l.isNotEmpty()) {
+                        mapList.value = l
+                        prefs.edit().putString("maps_json", mapsToJson(l)).apply()
+                    }
                 } catch (e: Exception) {
                 }
             }
@@ -764,18 +822,23 @@ fun App(st: AppState, prefs: SharedPreferences) {
             roleInfo.value.values.mapNotNull { it.icon } +
             weaponList.value.mapNotNull { it.icon } +
             mapList.value.mapNotNull { it.icon }).distinct()
-        total = urls.size
+        // Solo se descargan las imágenes que aún no están guardadas en el dispositivo
+        val saved = prefs.getStringSet("preloaded", emptySet()) ?: emptySet()
+        val missing = urls.filter { it !in saved }
+        total = missing.size
         done = 0
         status = "Descargando imágenes…"
         val loader = ctx.imageLoader
+        val ok = mutableListOf<String>()
         withTimeoutOrNull(45000) {
             val sem = Semaphore(12)
             coroutineScope {
-                urls.map { u ->
+                missing.map { u ->
                     async {
                         sem.withPermit {
                             try {
-                                loader.execute(ImageRequest.Builder(ctx).data(u).build())
+                                val res = loader.execute(ImageRequest.Builder(ctx).data(u).build())
+                                if (res is SuccessResult) ok.add(u)
                             } catch (e: Exception) {
                             }
                             done++
@@ -784,6 +847,7 @@ fun App(st: AppState, prefs: SharedPreferences) {
                 }.awaitAll()
             }
         }
+        if (ok.isNotEmpty()) prefs.edit().putStringSet("preloaded", HashSet(saved + ok)).apply()
         ready = true
     }
 
@@ -815,7 +879,7 @@ fun App(st: AppState, prefs: SharedPreferences) {
 
     fun spinWeapon() {
         if (spinning) return
-        val list = st.weapons()
+        val list = st.weaponPool()
         if (list.isEmpty()) return
         scope.launch {
             spinning = true
@@ -834,7 +898,7 @@ fun App(st: AppState, prefs: SharedPreferences) {
 
     if (!ready) {
         LoadingScreen(
-            status = if (total > 0) "Descargando imágenes $done/$total" else status,
+            status = if (total > 0) "Descargando imágenes $done/$total\nSolo la primera vez: después quedan guardadas" else status,
             done = done, total = total, canSkip = canSkip, onSkip = { ready = true }
         )
         return
@@ -843,10 +907,7 @@ fun App(st: AppState, prefs: SharedPreferences) {
     Scaffold(
         containerColor = BG,
         topBar = {
-            Row(
-                Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp)) {
                 Text(
                     when (tab) {
                         0 -> "AGENTES"
@@ -854,9 +915,10 @@ fun App(st: AppState, prefs: SharedPreferences) {
                         else -> "ARMAS"
                     },
                     fontSize = 22.sp, fontWeight = FontWeight.Black, letterSpacing = 3.sp,
-                    modifier = Modifier.weight(1f)
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.align(Alignment.Center)
                 )
-                IconButton(onClick = { showSettings = true }) {
+                IconButton(onClick = { showSettings = true }, modifier = Modifier.align(Alignment.CenterEnd)) {
                     Icon(Icons.Filled.Settings, contentDescription = "Ajustes", tint = Color.Gray)
                 }
             }
@@ -869,23 +931,36 @@ fun App(st: AppState, prefs: SharedPreferences) {
                     Icons.Filled.GpsFixed to "Armas"
                 )
                 items.forEachIndexed { i, (icon, desc) ->
+                    val sel = tab == i
+                    val scale by animateFloatAsState(
+                        if (sel) 1.15f else 1f,
+                        spring(dampingRatio = 0.6f, stiffness = 400f),
+                        label = "navScale"
+                    )
+                    val tint by animateColorAsState(if (sel) RED else Color.Gray, tween(220), label = "navTint")
                     NavigationBarItem(
-                        selected = tab == i,
+                        selected = sel,
                         onClick = { tab = i },
-                        icon = { Icon(icon, contentDescription = desc, modifier = Modifier.size(28.dp)) },
+                        icon = {
+                            Icon(
+                                icon, contentDescription = desc, tint = tint,
+                                modifier = Modifier.size(28.dp).scale(scale)
+                            )
+                        },
                         alwaysShowLabel = false,
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = RED,
-                            unselectedIconColor = Color.Gray,
-                            indicatorColor = RED.copy(alpha = 0.18f)
-                        )
+                        colors = NavigationBarItemDefaults.colors(indicatorColor = RED.copy(alpha = 0.16f))
                     )
                 }
             }
         }
     ) { pad ->
-        Box(Modifier.padding(pad).fillMaxSize()) {
-            when (tab) {
+        Crossfade(
+            targetState = tab,
+            animationSpec = tween(220),
+            modifier = Modifier.padding(pad).fillMaxSize(),
+            label = "tabs"
+        ) { t ->
+            when (t) {
                 0 -> AgentsTab(st, rot, avail, spinning) { spinAgent() }
                 1 -> TeamTab(st)
                 else -> WeaponsTab(st, shownWeapon, spinning) { spinWeapon() }
@@ -1037,37 +1112,60 @@ fun TeamTab(st: AppState) {
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 16.dp)) {
         SectionTitle("Mapa")
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            items(mapList.value) { m ->
-                val on = m.name == st.mapName
-                val shape = RoundedCornerShape(14.dp)
-                Column(
-                    Modifier.width(112.dp).clip(shape).background(SURFACE)
-                        .border(2.dp, if (on) RED else OUTLINE, shape)
-                        .clickable { st.mapName = m.name }
-                ) {
-                    if (m.icon != null) {
-                        AsyncImage(
-                            model = m.icon, contentDescription = m.name,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxWidth().height(58.dp)
-                        )
-                    } else {
-                        Box(Modifier.fillMaxWidth().height(58.dp).background(OUTLINE))
-                    }
-                    Text(
-                        m.name, fontSize = 13.sp, maxLines = 1,
-                        fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
-                        modifier = Modifier.padding(8.dp)
+        var mapMenu by remember { mutableStateOf(false) }
+        val current = mapList.value.firstOrNull { it.name == st.mapName }
+        Box(Modifier.padding(horizontal = 16.dp)) {
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(SURFACE)
+                    .border(1.5.dp, if (mapMenu) RED else OUTLINE, RoundedCornerShape(14.dp))
+                    .clickable { mapMenu = true }.padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                MapThumb(current?.icon, st.mapName)
+                Spacer(Modifier.width(12.dp))
+                Text(st.mapName, fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.weight(1f))
+                if (st.mapName in POOL) {
+                    Text("En rotación", fontSize = 11.sp, color = GREEN)
+                }
+                Icon(Icons.Filled.ArrowDropDown, contentDescription = "Cambiar mapa", tint = Color.Gray)
+            }
+            DropdownMenu(
+                expanded = mapMenu,
+                onDismissRequest = { mapMenu = false },
+                modifier = Modifier.width(320.dp).heightIn(max = 380.dp)
+            ) {
+                mapList.value.forEach { m ->
+                    DropdownMenuItem(
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                MapThumb(m.icon, m.name)
+                                Spacer(Modifier.width(12.dp))
+                                Text(
+                                    m.name, modifier = Modifier.weight(1f),
+                                    fontWeight = if (m.name == st.mapName) FontWeight.Bold else FontWeight.Normal
+                                )
+                                if (m.name in POOL) Text("En rotación", fontSize = 11.sp, color = GREEN)
+                            }
+                        },
+                        onClick = { st.mapName = m.name; mapMenu = false }
                     )
                 }
             }
         }
 
-        SectionTitle("Tu equipo")
+        SectionTitle("Tu equipo") {
+            IconButton(
+                onClick = { for (i in 0 until 5) st.team[i] = null },
+                enabled = team.isNotEmpty(),
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    Icons.Filled.RestartAlt, contentDescription = "Reiniciar equipo",
+                    tint = if (team.isNotEmpty()) Color.White else OUTLINE
+                )
+            }
+        }
+
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             repeat(5) { i ->
                 val a = AGENTS.firstOrNull { it.name == st.team[i] }
@@ -1378,9 +1476,11 @@ fun TeamTab(st: AppState) {
 
 @Composable
 fun WeaponsTab(st: AppState, shown: Weapon?, spinning: Boolean, onSpin: () -> Unit) {
-    val pool = st.weapons()
+    val all = st.weapons()
+    val pool = st.weaponPool()
+    var text by remember { mutableStateOf(st.credits.toString()) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 16.dp)) {
-        if (pool.isEmpty()) {
+        if (all.isEmpty()) {
             Box(Modifier.fillMaxWidth().height(300.dp), contentAlignment = Alignment.Center) {
                 Text(
                     "Conéctate a internet una vez\npara descargar las armas.",
@@ -1388,6 +1488,33 @@ fun WeaponsTab(st: AppState, shown: Weapon?, spinning: Boolean, onSpin: () -> Un
                 )
             }
             return@Column
+        }
+
+        SectionTitle("Tus créditos")
+        OutlinedTextField(
+            value = text,
+            onValueChange = { v ->
+                val d = v.filter { it.isDigit() }.take(5)
+                val num = d.toIntOrNull() ?: 0
+                st.credits = num.coerceAtMost(9000)
+                text = if (num > 9000) "9000" else d
+            },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            suffix = { Text("créditos", color = Color.Gray) },
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+        )
+        FlowRow(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            listOf(800, 1600, 2900, 3900, 9000).forEach { c ->
+                FilterChip(
+                    selected = st.credits == c,
+                    onClick = { st.credits = c; text = c.toString() },
+                    label = { Text("$c") }
+                )
+            }
         }
 
         Column(
@@ -1418,7 +1545,13 @@ fun WeaponsTab(st: AppState, shown: Weapon?, spinning: Boolean, onSpin: () -> Un
             }
         }
 
-        BigButton("SORTEAR ARMA", enabled = !spinning, onClick = onSpin)
+        BigButton("SORTEAR ARMA", enabled = !spinning && pool.isNotEmpty(), onClick = onSpin)
+
+        Text(
+            "${pool.size} de ${all.size} armas entran al sorteo con ${st.credits} créditos",
+            fontSize = 12.sp, color = Color.Gray, textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+        )
 
         SectionTitle("Armas en el sorteo")
         FlowRow(
@@ -1427,11 +1560,12 @@ fun WeaponsTab(st: AppState, shown: Weapon?, spinning: Boolean, onSpin: () -> Un
             horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            pool.forEach { w ->
+            all.forEach { w ->
                 val on = shown?.name == w.name
+                val buyable = st.canBuy(w)
                 val shape = RoundedCornerShape(10.dp)
                 Box(
-                    Modifier.width(78.dp).height(52.dp).clip(shape)
+                    Modifier.width(78.dp).height(52.dp).alpha(if (buyable) 1f else 0.2f).clip(shape)
                         .background(if (on) RED.copy(alpha = 0.2f) else SURFACE)
                         .border(if (on) 2.dp else 1.dp, if (on) RED else OUTLINE, shape)
                         .padding(4.dp),
